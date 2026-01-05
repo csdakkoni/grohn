@@ -383,7 +383,12 @@ export default function App() {
     }, [user, currentOwnerId, loadAllData]);
 
     // Helper functions
-    const handleSignOut = async () => { await supabase.auth.signOut(); };
+    const handleSignOut = async () => {
+        await supabase.auth.signOut();
+        setSession(null);
+        setUser(null);
+        window.location.href = '/';
+    };
 
     const getAccountName = (id) => accounts.find(a => a.id === parseInt(id))?.name || '-';
 
