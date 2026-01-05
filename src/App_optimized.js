@@ -384,7 +384,7 @@ export default function App() {
 
     // Helper functions
     const handleSignOut = async () => {
-        if (!window.confirm('Çıkış yapılacaktır. Onaylıyor musunuz?')) return;
+        if (!window.confirm('Veriler silinip çıkış yapılacak. Onaylıyor musunuz?')) return;
 
         // 1. Clear Supabase
         try {
@@ -404,7 +404,23 @@ export default function App() {
                 .replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
         });
 
-        // 4. Force Reload
+        // 4. Clear IndexedDB (Async)
+        try {
+            if (window.indexedDB && window.indexedDB.databases) {
+                const dbs = await window.indexedDB.databases();
+                dbs.forEach((db) => { window.indexedDB.deleteDatabase(db.name); });
+            }
+        } catch (e) { console.error('IDB clear error', e); }
+
+        // 5. Clear Caches
+        try {
+            if (window.caches) {
+                const keys = await window.caches.keys();
+                await Promise.all(keys.map(key => window.caches.delete(key)));
+            }
+        } catch (e) { console.error('Cache clear error', e); }
+
+        // 6. Force Reload
         setSession(null);
         setUser(null);
         window.location.href = '/';
