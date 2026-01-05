@@ -198,14 +198,20 @@ export default function App() {
     const [ratesLastUpdate, setRatesLastUpdate] = useState(null);
     const [baseCurrency, setBaseCurrency] = useState('TRY');
 
+    // Auth State Ref to block updates during logout
+    const isLoggingOut = useRef(false);
+
     // Auth effect
     useEffect(() => {
         supabase.auth.getSession().then(({ data: { session } }) => {
+            if (isLoggingOut.current) return;
             setSession(session);
             setUser(session?.user ?? null);
             setLoading(false);
         });
         const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+            if (isLoggingOut.current) return; // BLOCK ALL UPDATES IF LOGGING OUT
+
             if (event === 'SIGNED_OUT') {
                 setSession(null);
                 setUser(null);
@@ -219,6 +225,7 @@ export default function App() {
         });
         return () => subscription.unsubscribe();
     }, []);
+
 
     // Fetch Role & Owner Logic
     const fetchUserRole = useCallback(async () => {
@@ -394,7 +401,10 @@ export default function App() {
     const handleSignOut = () => {
         if (!window.confirm('Çıkış yapılacaktır. Onaylıyor musunuz?')) return;
 
-        // 1. IMMEDIATE UI RESET (Visual Feedback)
+        // 1. SET FLAG TO BLOCK LISTENER
+        isLoggingOut.current = true;
+
+        // 2. IMMEDIATE UI RESET (Visual Feedback)
         setSession(null);
         setUser(null);
         setUserRole('none');
