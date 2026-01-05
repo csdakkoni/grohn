@@ -29,6 +29,11 @@ export default function Auth() {
                 password
             });
             error = signInError;
+            if (!error) {
+                // FORCE RELOAD to sync state with App.js
+                window.location.reload();
+                return;
+            }
         }
 
         if (error) alert(error.message);
