@@ -1,21 +1,23 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from './supabaseClient';
 import Auth from './components/Auth';
-import CurrentAccountsModule from './components/CurrentAccountsModule';
-import PurchasingModule from './components/PurchasingModule';
 import RecipesModule from './components/RecipesModule';
 import ProductionModule from './components/ProductionModule';
-import StockHistoryModule from './components/StockHistoryModule';
 import FinancialReportsModule from './components/FinancialReportsModule';
 
 import RoleManagementModule from './components/RoleManagementModule';
-import PriceCalculatorModule from './components/PriceCalculatorModule';
 import QualityControlModule from './components/QualityControlModule';
-import SalesModule from './components/SalesModule';
-import { LayoutDashboard, Briefcase, Edit, Trash2, Plus, LogOut, FlaskConical, ShoppingBag, ArrowLeft, Beaker, Factory, Download, Printer, FileSpreadsheet, Filter, Eye, RefreshCw, DollarSign, Package, TrendingUp, Settings, History, AlertTriangle, Users, Shield, Calculator, ClipboardCheck, Menu, X } from 'lucide-react';
+import InventoryManagementModule from './components/InventoryManagementModule';
+import CommercialManagementModule from './components/CommercialManagementModule';
+import SalesManagerModule from './components/SalesManagerModule';
+import MarketingModule from './components/MarketingModule';
+import SettingsModule from './components/SettingsModule';
+import { LayoutDashboard, Briefcase, Edit, Trash2, Plus, LogOut, FlaskConical, ShoppingBag, ArrowLeft, Beaker, Factory, Download, Printer, FileSpreadsheet, Filter, Eye, RefreshCw, DollarSign, Package, TrendingUp, Settings, History, AlertTriangle, Users, Shield, Calculator, ClipboardCheck, Menu, X, ChevronDown, ChevronRight, ShoppingCart, FileText, ShieldCheck } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { preparePDFWithFont } from './utils/exportUtils';
+import { drawCIHeader, drawCIFooter, CI_PALETTE } from './utils/pdfCIUtils';
 
 // ==================== UTILITY FUNCTIONS ====================
 const parseInputFloat = (val) => {
@@ -49,13 +51,27 @@ const exportToExcel = (data, fileName) => {
     XLSX.writeFile(wb, fileName + '.xlsx');
 };
 
-const exportToPDF = (title, headers, data, fileName) => {
-    const doc = new jsPDF();
-    doc.setFontSize(18);
-    doc.text(title, 14, 22);
-    doc.setFontSize(11);
-    doc.text('Tarih: ' + new Date().toLocaleDateString('tr-TR'), 14, 30);
-    autoTable(doc, { startY: 35, head: [headers], body: data, styles: { font: 'helvetica', fontSize: 9 }, headStyles: { fillColor: [79, 70, 229] } });
+const exportToPDF = async (title, headers, data, fileName) => {
+    const doc = await preparePDFWithFont();
+    const fontName = doc.activeFont || 'helvetica';
+    const docDate = new Date().toLocaleDateString('tr-TR');
+
+    drawCIHeader(doc, title, 'KURUMSAL VERİ SİSTEMİ', docDate);
+
+    autoTable(doc, {
+        startY: 40,
+        head: [headers],
+        body: data,
+        theme: 'grid',
+        styles: { font: fontName, fontSize: 8, cellPadding: 2 },
+        headStyles: { fillColor: CI_PALETTE.pure_black, textColor: 255 },
+        margin: { top: 40, bottom: 35 },
+        didDrawPage: (data) => {
+            drawCIHeader(doc, title, 'KURUMSAL VERİ SİSTEMİ', docDate);
+            drawCIFooter(doc, {}, 'Otomatik Rapor v5.3.0');
+        }
+    });
+
     doc.save(fileName + '.pdf');
 };
 
@@ -76,19 +92,19 @@ const FilterDropdown = ({ options, value, onChange, label }) => {
     const [isOpen, setIsOpen] = useState(false);
     return (
         <div className="relative inline-block">
-            <button onClick={(e) => { e.stopPropagation(); setIsOpen(!isOpen); }} className={'ml-2 hover:text-indigo-600 transition-colors ' + (value ? 'text-indigo-600' : 'text-slate-400')} title={'Filtrele: ' + label}>
+            <button onClick={(e) => { e.stopPropagation(); setIsOpen(!isOpen); }} className={'ml-2 hover:text-[#0071e3] transition-colors ' + (value ? 'text-[#0071e3]' : 'text-[#86868b]')} title={'Filtrele: ' + label}>
                 <Filter className="h-4 w-4" />
             </button>
             {isOpen && (
                 <>
                     <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
-                    <div className="absolute right-0 z-50 mt-2 w-48 bg-white rounded-lg shadow-xl border-2 border-slate-200">
-                        <div className="p-2 max-h-64 overflow-y-auto">
-                            <button onClick={() => { onChange(''); setIsOpen(false); }} className="w-full text-left px-3 py-2 hover:bg-slate-100 rounded text-sm font-medium text-slate-600">
+                    <div className="absolute right-0 z-50 mt-2 w-48 bg-white rounded-[6px] shadow-xl border border-[#d2d2d7] animate-fade-in">
+                        <div className="p-1 max-h-64 overflow-y-auto">
+                            <button onClick={() => { onChange(''); setIsOpen(false); }} className="w-full text-left px-3 py-2 hover:bg-[#f5f5f7] rounded-[4px] text-xs font-medium text-[#1d1d1f]">
                                 Tümü
                             </button>
                             {options.map((opt, idx) => (
-                                <button key={idx} onClick={() => { onChange(opt); setIsOpen(false); }} className={'w-full text-left px-3 py-2 hover:bg-slate-100 rounded text-sm ' + (value === opt ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-slate-700')}>
+                                <button key={idx} onClick={() => { onChange(opt); setIsOpen(false); }} className={'w-full text-left px-3 py-2 hover:bg-[#f5f5f7] rounded-[4px] text-xs ' + (value === opt ? 'bg-[#e8f2ff] text-[#0071e3] font-bold' : 'text-[#1d1d1f]')}>
                                     {opt}
                                 </button>
                             ))}
@@ -102,20 +118,43 @@ const FilterDropdown = ({ options, value, onChange, label }) => {
 
 const ExportButtons = ({ onExcel, onPDF, onPrint }) => (
     <div className="flex gap-2">
-        <button onClick={onExcel} className="bg-green-600 hover:bg-green-700 text-white px-3 py-2 rounded-lg font-medium flex items-center gap-1 text-sm transition-colors">
-            <FileSpreadsheet className="h-4 w-4" /> Excel
+        <button onClick={onExcel} className="btn-primary-green flex items-center gap-2 text-xs py-2 px-3">
+            <FileSpreadsheet className="h-3.5 w-3.5" /> Excel
         </button>
-        <button onClick={onPDF} className="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-lg font-medium flex items-center gap-1 text-sm transition-colors">
-            <Download className="h-4 w-4" /> PDF
+        <button onClick={onPDF} className="btn-primary-red flex items-center gap-2 text-xs py-2 px-3">
+            <Download className="h-3.5 w-3.5" /> PDF
         </button>
-        <button onClick={onPrint} className="bg-slate-600 hover:bg-slate-700 text-white px-3 py-2 rounded-lg font-medium flex items-center gap-1 text-sm transition-colors">
-            <Printer className="h-4 w-4" /> Yazdır
+        <button onClick={onPrint} className="btn-secondary flex items-center gap-2 text-xs py-2 px-3">
+            <Printer className="h-3.5 w-3.5" /> Yazdır
         </button>
     </div>
 );
 
+const SidebarItem = ({ active, onClick, icon, label }) => (
+    <button
+        onClick={onClick}
+        className={`w-full group flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-300 text-sm relative overflow-hidden ${active
+            ? 'bg-white/10 text-white shadow-[0_0_20px_rgba(79,70,229,0.15)] backdrop-blur-md'
+            : 'text-zinc-500 hover:text-zinc-200 hover:bg-white/5'
+            }`}
+    >
+        {/* Active Indicator Bar */}
+        <div className={`absolute left-0 top-3 bottom-3 w-1 bg-indigo-500 rounded-r-full transition-all duration-500 transform ${active ? 'scale-y-100 opacity-100' : 'scale-y-0 opacity-0'}`} />
+
+        <div className={`transition-transform duration-300 ${active ? 'scale-110 text-indigo-400' : 'group-hover:text-zinc-300 group-hover:scale-105'}`}>
+            {icon}
+        </div>
+        <span className={`font-medium tracking-wide transition-colors duration-300 ${active ? 'translate-x-1' : 'group-hover:translate-x-0.5'}`}>
+            {label}
+        </span>
+
+        {/* Subtle Light Reflection (Hover) */}
+        <div className="absolute inset-0 opacity-0 group-hover:opacity-10 pointer-events-none transition-opacity bg-gradient-to-r from-transparent via-white/5 to-transparent -translate-x-full group-hover:translate-x-full duration-1000" />
+    </button>
+);
+
 const CurrencySelector = ({ value, onChange, className = '' }) => (
-    <select value={value} onChange={e => onChange(e.target.value)} className={'border-2 border-slate-200 p-2 rounded-lg focus:border-indigo-500 focus:outline-none ' + className}>
+    <select value={value} onChange={e => onChange(e.target.value)} className={'select-industrial ' + className}>
         <option value="USD">USD ($)</option>
         <option value="EUR">EUR (€)</option>
         <option value="TRY">TRY (₺)</option>
@@ -127,8 +166,13 @@ export default function App() {
     const [session, setSession] = useState(null);
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [activeTab, setActiveTab] = useState('dashboard');
+    const [globalSettings, setGlobalSettings] = useState({
+        global_overhead_rate: 0.2,
+        monthly_interest_rate: 4.0
+    });
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+    const [activeTab, setActiveTab] = useState('dashboard');
+
 
     // Role & Access State
     const [currentOwnerId, setCurrentOwnerId] = useState(null);
@@ -143,14 +187,15 @@ export default function App() {
     const [productions, setProductions] = useState([]);
     const [sales, setSales] = useState([]);
     const [qualitySpecs, setQualitySpecs] = useState([]);
+    const [ibcMovements, setIbcMovements] = useState([]);
 
     // Currency states
     const [exchangeRates, setExchangeRates] = useState({ USD: 1, EUR: 0.92, TRY: 34.50 });
-    const [manualRates, setManualRates] = useState({ USD: '', EUR: '', TRY: '' });
+    const [manualRates, setManualRates] = useState({ usd_try: '', eur_try: '' });
     const [useManualRates, setUseManualRates] = useState(false);
     const [ratesLoading, setRatesLoading] = useState(false);
     const [ratesLastUpdate, setRatesLastUpdate] = useState(null);
-    const [baseCurrency, setBaseCurrency] = useState('USD');
+    const [baseCurrency, setBaseCurrency] = useState('TRY');
 
     // Auth effect
     useEffect(() => {
@@ -232,10 +277,15 @@ export default function App() {
     // Get active rates (manual or auto)
     const getActiveRates = useCallback(() => {
         if (useManualRates) {
+            const usd_try = parseInputFloat(manualRates.usd_try) || exchangeRates.TRY;
+            const eur_try = parseInputFloat(manualRates.eur_try) || ((1 / exchangeRates.EUR) * exchangeRates.TRY);
+
+            // Internal logic is USD based: 1 USD = usd_try TRY
+            // 1 EUR = eur_try TRY => 1 USD = (usd_try / eur_try) EUR
             return {
-                USD: parseInputFloat(manualRates.USD) || exchangeRates.USD,
-                EUR: parseInputFloat(manualRates.EUR) || exchangeRates.EUR,
-                TRY: parseInputFloat(manualRates.TRY) || exchangeRates.TRY
+                USD: 1.0,
+                TRY: usd_try,
+                EUR: usd_try / eur_try
             };
         }
         return exchangeRates;
@@ -249,17 +299,39 @@ export default function App() {
     }, [getActiveRates]);
 
     // Load all data
+    const loadSettings = useCallback(async () => {
+        const { data, error } = await supabase.from('settings').select('*');
+        if (!error && data) {
+            const settingsObj = {};
+            data.forEach(s => { settingsObj[s.setting_key] = s.value; });
+            setGlobalSettings(prev => ({ ...prev, ...settingsObj }));
+        }
+    }, []);
+
+    const saveSetting = async (key, value) => {
+        const { error } = await supabase.from('settings').upsert({ setting_key: key, value }, { onConflict: 'setting_key' });
+        if (!error) {
+            setGlobalSettings(prev => ({ ...prev, [key]: value }));
+        } else {
+            console.error('Settings save error:', error);
+            alert('Ayar kaydedilirken hata oluştu.');
+        }
+    };
+
     const loadAllData = useCallback(async () => {
         if (!user || !currentOwnerId) return;
 
-        const [accRes, invRes, purRes, recRes, prodRes, salesRes, specsRes] = await Promise.all([
+        await loadSettings();
+
+        const [accRes, invRes, purRes, recRes, prodRes, salesRes, specsRes, ibcRes] = await Promise.all([
             supabase.from('accounts').select('*').eq('user_id', currentOwnerId).order('created_at', { ascending: false }),
             supabase.from('inventory').select('*, lots (*)').eq('user_id', currentOwnerId).order('created_at', { ascending: false }),
             supabase.from('purchases').select('*').eq('user_id', currentOwnerId).order('created_at', { ascending: false }),
             supabase.from('recipes').select('*, recipe_ingredients (*)').eq('user_id', currentOwnerId).order('created_at', { ascending: false }),
             supabase.from('productions').select('*').eq('user_id', currentOwnerId).order('created_at', { ascending: false }),
             supabase.from('sales').select('*').eq('user_id', currentOwnerId).order('created_at', { ascending: false }),
-            supabase.from('quality_specs').select('*') // Specs might be public or shared, filtering by product mainly
+            supabase.from('quality_specs').select('*'), // Specs might be public or shared, filtering by product mainly
+            supabase.from('ibc_movements').select('*').eq('user_id', currentOwnerId).order('created_at', { ascending: false })
         ]);
 
         setAccounts(accRes.data || []);
@@ -280,8 +352,19 @@ export default function App() {
             };
         });
         setProductions(enrichedProductions);
-        setSales(salesRes.data || []);
+
+        // Map sales to include customer name from accounts
+        const salesData = salesRes.data || [];
+        const enrichedSales = salesData.map(sale => {
+            const customer = (accRes.data || []).find(c => c.id === sale.customer_id);
+            return {
+                ...sale,
+                customer_name: customer ? customer.name : 'Bilinmeyen Müşteri'
+            };
+        });
+        setSales(enrichedSales);
         setQualitySpecs(specsRes.data || []);
+        setIbcMovements(ibcRes.data || []);
     }, [user, currentOwnerId]);
 
     useEffect(() => {
@@ -380,80 +463,200 @@ export default function App() {
 
     const handlePurchase = async (form) => {
         if (!canEdit) return alert('Yetkiniz yok!');
-        let itemId;
-        let itemName;
+        try {
+            const item = !form.isNewItem ? inventory.find(i => i.id === parseInt(form.itemId)) : null;
+            const itemName = form.isNewItem ? form.newItemName : (item?.name || '');
+            const itemType = form.isNewItem ? form.newItemType : (item?.type || 'Hammadde');
 
-        // Calculate Total
-        const total = parseFloat(form.qty) * parseFloat(form.price);
+            const { data, error: purchaseError } = await supabase.rpc('process_purchase', {
+                p_user_id: currentOwnerId,
+                p_supplier_id: parseInt(form.supplierId),
+                p_item_name: itemName,
+                p_item_type: itemType,
+                p_unit: form.isNewItem ? form.newItemUnit : form.purchaseUnit,
+                p_qty: parseInputFloat(form.qty),
+                p_price: parseInputFloat(form.price),
+                p_currency: form.currency || 'USD',
+                p_term_days: parseInt(form.termDays) || 0,
+                p_lot_no: form.lotNo || '',
+                p_is_new_item: !!form.isNewItem,
+                p_item_id: form.isNewItem ? null : parseInt(form.itemId),
+                p_capacity_value: form.capacityValue ? parseInputFloat(form.capacityValue) : null,
+                p_capacity_unit: form.capacityUnit || null,
+                p_tare_weight: form.tareWeight ? parseInputFloat(form.tareWeight) : null
+            });
 
-        if (form.isNewItem) {
-            // New Item
-            let insertData = {
-                user_id: currentOwnerId,
-                name: form.newItemName,
-                type: form.newItemType, // Hammadde or Ambalaj
-                unit: form.newItemUnit,
-                cost: form.isInfinite ? 0 : parseInputFloat(form.price), // 0 cost for Infinite
-                currency: form.currency || 'USD',
-                track_stock: !form.isInfinite, // Don't track stock if infinite
-                density: 1.0 // Default density
-            };
+            if (purchaseError) throw purchaseError;
 
-            if (form.newItemType === 'Ambalaj' && !form.isInfinite) {
-                insertData.capacity_value = parseInputFloat(form.capacityValue);
-                insertData.capacity_unit = form.capacityUnit;
-                insertData.tare_weight = parseInputFloat(form.tareWeight);
-            }
-            const { data } = await supabase.from('inventory').insert(insertData).select().single();
-            itemName = data.name;
-            itemId = data.id;
-        } else {
-            await supabase.from('inventory').update({
-                cost: parseInputFloat(form.price),
-                currency: form.currency,
-                payment_term: parseInputFloat(form.termDays)
-            }).eq('id', parseInt(form.itemId));
-            const item = inventory.find(i => i.id === parseInt(form.itemId));
-            itemName = item?.name || '';
-            itemId = parseInt(form.itemId);
-        }
-
-        // If Infinite Source, stop here (no purchase record, no lot)
-        if (form.isInfinite) {
             loadAllData();
-            alert(`"${itemName}" sonsuz kaynak olarak tanımlandı.\nStok takibi yapılmayacak, maliyeti 0 olacak.`);
             return true;
+        } catch (error) {
+            console.error('Alım Hatası:', error);
+            alert('İşlem sırasında bir hata oluştu: ' + (error.message || JSON.stringify(error)));
+            return false;
         }
-
-        // Add lot
-        await supabase.from('lots').insert({
-            inventory_id: itemId,
-            lot_no: form.lotNo || 'LOT-' + Date.now(),
-            qty: parseInputFloat(form.qty)
-        });
-
-        // Record purchase
-        await supabase.from('purchases').insert({
-            user_id: currentOwnerId,
-            supplier_id: parseInt(form.supplierId),
-            item_name: itemName,
-            qty: parseInputFloat(form.qty),
-            price: parseInputFloat(form.price),
-            currency: form.currency,
-            total,
-            payment_term: parseInputFloat(form.termDays),
-            lot_no: form.lotNo
-        });
-
-        loadAllData();
-        return true;
     };
 
     const handleDeletePurchase = async (id) => {
         if (!canDelete) return alert('Sadece Admin silebilir!');
         if (window.confirm('Bu alımı silmek istediğinize emin misiniz?')) {
+            const purchase = purchases.find(p => p.id === id);
+            if (purchase) {
+                // Delete associated lot first
+                await supabase.from('lots').delete()
+                    .eq('lot_no', purchase.lot_no)
+                    .eq('inventory_id', (inventory.find(i => i.name === purchase.item_name))?.id);
+
+                // Delete associated stock movement (Robust dual-targeted deletion)
+                // 1. Delete by direct ID link
+                await supabase.from('stock_movements').delete()
+                    .eq('related_id', id)
+                    .eq('reason', 'Purchase');
+
+                // 2. Delete by lot/item name to catch "ghost" records from previous versions
+                await supabase.from('stock_movements').delete()
+                    .eq('lot_no', purchase.lot_no)
+                    .eq('item_name', purchase.item_name)
+                    .eq('reason', 'Purchase');
+            }
             await supabase.from('purchases').delete().eq('id', id);
             loadAllData();
+        }
+    };
+
+    const handleUpdatePurchase = async (id, form) => {
+        if (!canEdit) return alert('Yetkiniz yok!');
+        try {
+            // Find item name if not in form (from existing purchase or inventory)
+            const purchase = purchases.find(p => p.id === id);
+            const itemName = form.itemName || purchase?.item_name || '';
+
+            const { data, error: updateError } = await supabase.rpc('process_purchase_update', {
+                p_purchase_id: id,
+                p_supplier_id: parseInt(form.supplierId),
+                p_item_name: itemName,
+                p_qty: parseInputFloat(form.qty),
+                p_price: parseInputFloat(form.price),
+                p_currency: form.currency || 'USD',
+                p_term_days: parseInt(form.termDays) || 0,
+                p_lot_no: form.lotNo || ''
+            });
+
+            if (updateError) throw updateError;
+
+            loadAllData();
+            return true;
+        } catch (error) {
+            console.error('Güncelleme Hatası:', error);
+            alert('Güncelleme sırasında bir hata oluştu: ' + (error.message || JSON.stringify(error)));
+            return false;
+        }
+    };
+
+    const handleStockReconciliation = async (itemId, physicalQty, notes) => {
+        if (!canEdit) return alert('Yetkiniz yok!');
+        try {
+            // 1. Get Physical Stock (from lots)
+            const physicalStock = getItemStock(itemId);
+
+            // 2. Get Logical Balance (from movements)
+            const { data: movements } = await supabase
+                .from('stock_movements')
+                .select('amount')
+                .eq('inventory_id', itemId);
+            const logicalStock = (movements || []).reduce((sum, m) => sum + parseFloat(m.amount), 0);
+
+            const lotAdjustment = physicalQty - physicalStock;
+            const moveAdjustment = physicalQty - logicalStock;
+
+            // Update LOTS if physically different
+            if (Math.abs(lotAdjustment) > 0.0001) {
+                const adjLot = `ADJ-${new Date().toISOString().split('T')[0].replace(/-/g, '')}`;
+                const { error: lotError } = await supabase.from('lots').insert({
+                    inventory_id: itemId,
+                    qty: lotAdjustment,
+                    lot_no: adjLot
+                });
+                if (lotError) throw lotError;
+            }
+
+            // Update MOVEMENTS if logically different OR if we want to log the event even if amount is 0
+            // We always log it for audit trail, but the 'amount' determines if it changes the running balance
+            const item = inventory.find(i => i.id === itemId);
+            const adjLot = `SYNC-${new Date().toISOString().split('T')[0].replace(/-/g, '')}`;
+
+            const { error: moveError } = await supabase.from('stock_movements').insert({
+                user_id: currentOwnerId,
+                inventory_id: itemId,
+                item_name: item?.name || 'Bilinmeyen',
+                type: moveAdjustment >= 0 ? 'In' : 'Out',
+                amount: moveAdjustment,
+                current_stock: physicalQty,
+                reason: 'Adjustment',
+                lot_no: adjLot,
+                notes: notes || (moveAdjustment === 0 ? 'Fiziksel/Mantıksal Senkronizasyon' : 'Sayım Farkı Düzeltmesi')
+            });
+
+            if (moveError) console.warn('Hareket kaydı oluşturulamadı:', moveError);
+
+            loadAllData();
+            alert('Stok başarıyla senkronize edildi.');
+            return true;
+        } catch (error) {
+            console.error('Stok düzeltme hatası:', error);
+            alert('Hata: ' + error.message);
+            return false;
+        }
+    };
+    const handleDeleteStockMovement = async (id) => {
+        if (!canEdit) return alert('Yetkiniz yok!');
+        if (!window.confirm('Bu stok hareket kaydını silmek istediğinize emin misiniz? Sadece geçmiş kaydı silinecektir, mevcut stok miktarı bu işlemden etkilenmez.')) return;
+        try {
+            const { error } = await supabase.from('stock_movements').delete().eq('id', id);
+            if (error) throw error;
+            loadAllData();
+            return true;
+        } catch (error) {
+            console.error('Hareket silme hatası:', error);
+            alert('Hata: ' + error.message);
+            return false;
+        }
+    };
+
+    const handleIbcReturn = async (customerId, quantity, notes) => {
+        if (!canEdit) return alert('Yetkiniz yok!');
+        try {
+            const { error } = await supabase.from('ibc_movements').insert({
+                user_id: currentOwnerId,
+                customer_id: customerId,
+                type: 'Returned',
+                quantity: quantity,
+                notes: notes || 'Müşteri İadesi'
+            });
+
+            if (error) throw error;
+            loadAllData();
+            alert('IBC iadesi başarıyla kaydedildi.');
+            return true;
+        } catch (error) {
+            console.error('IBC iade hatası:', error);
+            alert('Hata: ' + error.message);
+            return false;
+        }
+    };
+
+    const handleDeleteIbcMovement = async (id) => {
+        if (!canDelete) return alert('Sadece yöneticiler IBC hareketlerini silebilir!');
+        if (!window.confirm('Bu IBC hareket kaydını silmek istediğinize emin misiniz?')) return;
+        try {
+            const { error } = await supabase.from('ibc_movements').delete().eq('id', id);
+            if (error) throw error;
+            loadAllData();
+            return true;
+        } catch (error) {
+            console.error('IBC hareket silme hatası:', error);
+            alert('Hata: ' + error.message);
+            return false;
         }
     };
 
@@ -461,54 +664,85 @@ export default function App() {
         if (!canEdit) return alert('Yetkiniz yok!');
         let productId = data.productId;
 
-        if (isNew) {
-            const { data: p } = await supabase.from('inventory').insert({
-                user_id: currentOwnerId,
-                name: newName,
-                type: 'Mamul',
-                unit: 'kg',
-                cost: 0,
-                currency: 'USD',
-                track_stock: true,
-                density: parseInputFloat(data.density) || 1.0
-            }).select().single();
-            productId = p.id;
+        try {
+            if (isNew) {
+                const { data: p, error: invError } = await supabase.from('inventory').insert({
+                    user_id: currentOwnerId,
+                    name: newName,
+                    type: 'Mamul',
+                    unit: 'kg',
+                    cost: 0,
+                    currency: 'USD',
+                    track_stock: true,
+                    density: parseInputFloat(data.density) || 1.0,
+                    ghs_symbols: data.ghsSymbols || [],
+                    shelf_life_months: parseInt(data.shelfLife) || 24
+                }).select().single();
 
-            // Generate PRD-000 code
-            const code = 'PRD-' + productId.toString().padStart(3, '0');
-            await supabase.from('inventory').update({ product_code: code }).eq('id', productId);
-        }
+                if (invError) throw invError;
+                if (!p) throw new Error('Ürün oluşturulamadı (Veritabanı yanıt vermedi).');
 
-        if (data.id) {
-            await supabase.from('recipes').update({
-                product_id: productId,
-                customer_id: parseInt(data.customerId) || null
-            }).eq('id', data.id);
-            await supabase.from('recipe_ingredients').delete().eq('recipe_id', data.id);
-            await supabase.from('recipe_ingredients').insert(
-                data.ingredients.map(i => ({
+                productId = p.id;
+                // Code generation is now handled by the database trigger (generate_next_product_code)
+            }
+
+            if (data.id) {
+                const { error: updateError } = await supabase.from('recipes').update({
+                    product_id: productId,
+                    customer_id: parseInt(data.customerId) || null
+                }).eq('id', data.id);
+
+                if (updateError) throw updateError;
+
+                if (data.ghsSymbols || data.shelfLife) {
+                    const invUpdate = {};
+                    if (data.ghsSymbols) invUpdate.ghs_symbols = data.ghsSymbols;
+                    if (data.shelfLife) invUpdate.shelf_life_months = parseInt(data.shelfLife);
+                    await supabase.from('inventory').update(invUpdate).eq('id', productId);
+                }
+                await supabase.from('recipe_ingredients').delete().eq('recipe_id', data.id);
+
+                const ingredientsData = data.ingredients.map(i => ({
                     recipe_id: data.id,
                     item_id: parseInt(i.itemId),
                     percentage: parseInputFloat(i.percentage)
-                }))
-            );
-        } else {
-            const { data: r } = await supabase.from('recipes').insert({
-                user_id: currentOwnerId,
-                product_id: productId,
-                customer_id: parseInt(data.customerId) || null
-            }).select().single();
-            await supabase.from('recipe_ingredients').insert(
-                data.ingredients.map(i => ({
+                }));
+
+                if (ingredientsData.length > 0) {
+                    const { error: ingError } = await supabase.from('recipe_ingredients').insert(ingredientsData);
+                    if (ingError) throw ingError;
+                }
+
+            } else {
+                const { data: r, error: recipeError } = await supabase.from('recipes').insert({
+                    user_id: currentOwnerId,
+                    product_id: productId,
+                    customer_id: parseInt(data.customerId) || null
+                }).select().single();
+
+                if (recipeError) throw recipeError;
+                if (!r) throw new Error('Reçete oluşturulamadı.');
+
+                const ingredientsData = data.ingredients.map(i => ({
                     recipe_id: r.id,
                     item_id: parseInt(i.itemId),
                     percentage: parseInputFloat(i.percentage)
-                }))
-            );
-        }
+                }));
 
-        loadAllData();
-        return true;
+                if (ingredientsData.length > 0) {
+                    const { error: ingError } = await supabase.from('recipe_ingredients').insert(ingredientsData);
+                    if (ingError) throw ingError;
+                }
+            }
+
+            loadAllData();
+            return true;
+
+        } catch (error) {
+            console.error('Reçete kaydetme hatası:', error);
+            alert('Reçete kaydedilirken hata oluştu: ' + error.message);
+            return false;
+        }
     };
 
     const handleDeleteRecipe = async (id) => {
@@ -549,19 +783,35 @@ export default function App() {
     // UPDATED: handleCompleteProduction
     const handleCompleteProduction = async (form) => {
         if (!canEdit) return alert('Yetkiniz yok!');
+
+        // Conversion helpers
+        const activeRates = getActiveRates();
+        const toUSD = (amount, currency) => {
+            if (!currency || currency === 'USD') return amount;
+            const rate = activeRates[currency];
+            return rate ? amount / rate : amount;
+        };
+        const fromUSD = (amountUSD, targetCurrency) => {
+            if (!targetCurrency || targetCurrency === 'USD') return amountUSD;
+            const rate = activeRates[targetCurrency];
+            return rate ? amountUSD * rate : amountUSD;
+        };
+
+        const targetCurrency = form.currency || 'USD';
+        const shippingUSD = toUSD(parseInputFloat(form.shippingCost), form.shippingCurrency);
+        const overheadUSD = toUSD(parseInputFloat(form.overheadCost), form.overheadCurrency);
+
         try {
             const { data, error } = await supabase.rpc('complete_production', {
                 p_production_id: parseInt(form.productionId),
                 p_user_id: currentOwnerId,
-                p_packaging_id: parseInt(form.packagingId),
-                p_shipping_cost: parseInputFloat(form.shippingCost),
-                p_overhead_cost: parseInputFloat(form.overheadCost),
-                p_sale_term_days: parseInputFloat(form.saleTermDays),
-                p_profit_margin: parseInputFloat(form.profitMarginPercent),
+                p_packaging_id: form.packagingId ? parseInt(form.packagingId) : null,
+                p_packaging_count: form.packagingCount ? parseInputFloat(form.packagingCount) : null,
                 p_qc_status: form.qcStatus,
-                p_qc_notes: form.qcNotes,
-                p_currency: form.currency || 'USD',
-                p_monthly_interest_rate: parseInputFloat(form.interestRate) || 4
+                p_qc_notes: form.qcNotes || '',
+                p_currency: targetCurrency,
+                p_usd_rate: getActiveRates().TRY,
+                p_eur_rate: (1 / getActiveRates().EUR) * getActiveRates().TRY
             });
 
             if (error) throw error;
@@ -578,13 +828,22 @@ export default function App() {
 
     const handleDeleteProduction = async (id) => {
         if (!canDelete) return alert('Sadece Admin silebilir!');
-        if (window.confirm('Bu üretimi silmek istediğinize emin misiniz?')) {
-            const { error } = await supabase.from('productions').delete().eq('id', id);
-            if (error) {
+        if (window.confirm('Bu üretimi silmek istediğinize emin misiniz? Bu işlem bağlı tüm stok hareketlerini ve test kayıtlarını da temizleyecektir.')) {
+            try {
+                const { data, error } = await supabase.rpc('delete_production', {
+                    p_production_id: id
+                });
+
+                if (error) throw error;
+
+                if (data.success) {
+                    loadAllData();
+                } else {
+                    alert('Hata: ' + data.error);
+                }
+            } catch (error) {
                 console.error('Silme hatası:', error);
-                alert('Silinemedi! (Bağlı kayıtlar veya yetki sorunu olabilir)\n' + error.message);
-            } else {
-                loadAllData();
+                alert('Silinemedi! ' + error.message);
             }
         }
     };
@@ -592,7 +851,7 @@ export default function App() {
     const handleSale = async (form) => {
         if (!canEdit) return alert('Yetkiniz yok!');
         try {
-            const { data, error } = await supabase.rpc('process_sale', {
+            const { data: saleId, error } = await supabase.rpc('process_sale', {
                 p_user_id: currentOwnerId,
                 p_customer_id: parseInt(form.customerId),
                 p_production_id: parseInt(form.productionId),
@@ -601,10 +860,37 @@ export default function App() {
                 p_currency: form.currency,
                 p_payment_term: parseInputFloat(form.paymentTerm),
                 p_sale_date: form.saleDate,
-                p_notes: form.notes || ''
+                p_notes: form.notes || '',
+                p_shipping_cost: parseInputFloat(form.shippingCost),
+                p_overhead_cost: parseInputFloat(form.overheadCost),
+                p_monthly_interest_rate: parseInputFloat(form.interestRate) || 4.5,
+                p_usd_rate: getActiveRates().TRY,
+                p_eur_rate: (1 / getActiveRates().EUR) * getActiveRates().TRY
             });
 
             if (error) throw error;
+
+            // TRACK IBC IF APPLICABLE (Based on ACTUAL packaging selected in sale)
+            if (form.packagingId) {
+                const pkg = inventory.find(i => i.id === parseInt(form.packagingId));
+                if (pkg && pkg.name.toUpperCase().includes('IBC')) {
+                    const prod = productions.find(p => p.id === parseInt(form.productionId));
+                    const saleQty = parseInputFloat(form.quantity);
+                    const capacity = parseFloat(pkg.capacity_value) || 1000;
+                    const pkgCount = Math.ceil(saleQty / capacity);
+
+                    if (pkgCount > 0) {
+                        await supabase.from('ibc_movements').insert({
+                            user_id: currentOwnerId,
+                            customer_id: parseInt(form.customerId),
+                            sale_id: saleId,
+                            type: 'Sent',
+                            quantity: pkgCount,
+                            notes: `Satış Sevkiyatı (Lot: ${prod?.lot_number || '?'})`
+                        });
+                    }
+                }
+            }
 
             loadAllData();
             alert('Satış başarıyla kaydedildi!');
@@ -612,6 +898,80 @@ export default function App() {
         } catch (error) {
             console.error('Satış hatası:', error);
             alert('Hata oluştu: ' + error.message);
+            return false;
+        }
+    };
+
+    const handleDeleteSale = async (id) => {
+        if (!canEdit) return alert('Yetkiniz yok!');
+        if (!window.confirm('Bu satış kaydını silmek istediğinize emin misiniz? Bu işlem stokları geri yükleyecek ve varsa IBC borcunu silecektir.')) return;
+        try {
+            // First cleanup IBC movements
+            await supabase.from('ibc_movements').delete().eq('sale_id', id);
+
+            const { data, error } = await supabase.rpc('delete_sale', {
+                p_sale_id: id,
+                p_user_id: currentOwnerId
+            });
+            if (error) throw error;
+            if (data && !data.success) throw new Error(data.message);
+            loadAllData();
+            return true;
+        } catch (error) {
+            console.error('Satış silme hatası:', error);
+            alert('Hata: ' + error.message);
+            return false;
+        }
+    };
+
+    const handleUpdateSale = async (id, form) => {
+        if (!canEdit) return alert('Yetkiniz yok!');
+        try {
+            const { data, error } = await supabase.rpc('update_sale', {
+                p_sale_id: id,
+                p_user_id: currentOwnerId,
+                p_customer_id: parseInt(form.customerId),
+                p_quantity: parseInputFloat(form.quantity),
+                p_unit_price: parseInputFloat(form.unitPrice),
+                p_currency: form.currency,
+                p_payment_term: parseInputFloat(form.paymentTerm),
+                p_sale_date: form.saleDate,
+                p_notes: form.notes || '',
+                p_packaging_id: parseInt(form.packagingId) || null
+            });
+            if (error) throw error;
+            if (data && !data.success) throw new Error(data.message);
+
+            // SYNC IBC MOVEMENT
+            await supabase.from('ibc_movements').delete().eq('sale_id', id);
+
+            if (form.packagingId) {
+                const pkg = inventory.find(i => i.id === parseInt(form.packagingId));
+                if (pkg && pkg.name.toUpperCase().includes('IBC')) {
+                    const sale = sales.find(s => s.id === id);
+                    const prod = productions.find(p => p.id === sale?.production_id);
+                    const saleQty = parseInputFloat(form.quantity);
+                    const capacity = parseFloat(pkg.capacity_value) || 1000;
+                    const pkgCount = Math.ceil(saleQty / capacity);
+
+                    if (pkgCount > 0) {
+                        await supabase.from('ibc_movements').insert({
+                            user_id: currentOwnerId,
+                            customer_id: parseInt(form.customerId),
+                            sale_id: id,
+                            type: 'Sent',
+                            quantity: pkgCount,
+                            notes: `Satış Güncelleme (Lot: ${prod?.lot_number || '?'})`
+                        });
+                    }
+                }
+            }
+
+            loadAllData();
+            return true;
+        } catch (error) {
+            console.error('Satış güncelleme hatası:', error);
+            alert('Hata: ' + error.message);
             return false;
         }
     };
@@ -630,65 +990,81 @@ export default function App() {
         // Low Stock Logic (Threshold: 100 for now, can be dynamic later)
         const lowStockItems = inventory.filter(i => {
             const stock = getItemStock(i.id);
-            return stock < 100; // Example threshold
+            // Only alert if critical_stock is defined and greater than 0, and current stock is below it
+            return i.critical_stock > 0 && stock < i.critical_stock;
         });
 
         return (
             <div className="space-y-6">
-                {/* Low Stock Alert */}
+                {/* Low Stock Alert - INDUSTRIAL */}
                 {lowStockItems.length > 0 && (
-                    <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-r-xl">
-                        <div className="flex items-start gap-3">
-                            <AlertTriangle className="h-6 w-6 text-red-600 flex-shrink-0" />
-                            <div>
-                                <h3 className="font-bold text-red-800">Kritik Stok Uyarısı</h3>
-                                <p className="text-sm text-red-700 mt-1">
-                                    Aşağıdaki ürünlerin stoku kritik seviyenin altında:
-                                </p>
-                                <div className="mt-2 flex flex-wrap gap-2">
-                                    {lowStockItems.map(i => (
-                                        <span key={i.id} className="bg-red-100 text-red-800 text-xs px-2 py-1 rounded-full font-bold border border-red-200">
-                                            {i.name} ({getItemStock(i.id).toFixed(2)} {i.unit})
-                                        </span>
-                                    ))}
-                                </div>
+                    <div className="bg-orange-50 border border-orange-200 p-4 rounded-[4px] flex items-start gap-4">
+                        <AlertTriangle className="h-5 w-5 text-orange-600" />
+                        <div>
+                            <h3 className="font-semibold text-orange-900 text-sm uppercase tracking-wide">TEDARİK ZİNCİRİ UYARISI</h3>
+                            <p className="text-sm text-orange-800 mt-1">
+                                Kritik stok seviyeleri tespit edildi:
+                            </p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                                {lowStockItems.map(i => (
+                                    <span key={i.id} className="bg-orange-100 text-orange-800 text-xs px-2 py-1 border border-orange-200 font-mono">
+                                        {i.name} [{getItemStock(i.id).toFixed(2)} {i.unit}]
+                                    </span>
+                                ))}
                             </div>
                         </div>
                     </div>
                 )}
 
-                <div className="flex justify-between items-center">
-                    <h2 className="text-2xl font-bold text-slate-800">📊 Dashboard</h2>
+                <div className="flex justify-between items-center pb-4 border-b border-gray-200">
+                    <div className="flex items-center gap-6">
+                        <div>
+                            <h2 className="heading-industrial text-2xl uppercase tracking-tight">GENEL GÖRÜNÜM</h2>
+                            <span className="text-gray-500 text-[10px] font-bold uppercase tracking-widest">ENDÜSTRİYEL KONTROL MERKEZİ</span>
+                        </div>
+
+                        {/* Instant Rates Badges */}
+                        <div className="hidden md:flex items-center gap-3">
+                            <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-sm">
+                                <span className="text-[10px] font-bold text-slate-500 uppercase">USD/TRY</span>
+                                <span className="text-sm font-mono font-bold text-indigo-600">{rates.TRY.toFixed(2)}</span>
+                            </div>
+                            <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-sm">
+                                <span className="text-[10px] font-bold text-slate-500 uppercase">EUR/TRY</span>
+                                <span className="text-sm font-mono font-bold text-indigo-600">{((1 / rates.EUR) * rates.TRY).toFixed(2)}</span>
+                            </div>
+                        </div>
+                    </div>
                     <div className="flex items-center gap-4">
-                        <CurrencySelector value={baseCurrency} onChange={setBaseCurrency} />
+                        <CurrencySelector value={baseCurrency} onChange={setBaseCurrency} className="input-industrial" />
                     </div>
                 </div>
 
-                {/* Exchange Rates Card */}
-                <div className="bg-gradient-to-r from-indigo-500 to-purple-600 rounded-xl p-6 text-white">
-                    <div className="flex justify-between items-start mb-4">
+                {/* Exchange Rates Card - INDUSTRIAL STYLE */}
+                <div className="card-industrial p-6">
+                    <div className="flex justify-between items-center mb-6">
                         <div>
-                            <h3 className="text-lg font-bold flex items-center gap-2">
-                                <DollarSign className="h-5 w-5" /> Döviz Kurları
+                            <h3 className="heading-industrial flex items-center gap-2 text-lg">
+                                <DollarSign className="h-5 w-5 text-[#0071e3]" /> FİNANSAL KURLAR
                             </h3>
-                            <p className="text-indigo-200 text-sm">
-                                {ratesLastUpdate ? `Son güncelleme: ${ratesLastUpdate.toLocaleString('tr-TR')}` : 'Yükleniyor...'}
+                            <p className="text-gray-500 text-xs mt-1 font-mono uppercase">
+                                {ratesLastUpdate ? `SON GÜNCELLEME: ${ratesLastUpdate.toLocaleString('tr-TR')}` : 'EŞİTLENİYOR...'}
                             </p>
                         </div>
-                        <div className="flex items-center gap-2">
-                            <label className="flex items-center gap-2 text-sm">
+                        <div className="flex items-center gap-4">
+                            <label className="flex items-center gap-2 text-sm text-gray-700 font-medium">
                                 <input
                                     type="checkbox"
                                     checked={useManualRates}
                                     onChange={e => setUseManualRates(e.target.checked)}
-                                    className="rounded"
+                                    className="rounded border-gray-300 text-[#0071e3] focus:ring-[#0071e3]"
                                 />
-                                Manuel Kur
+                                MANUEL KURLAR
                             </label>
                             <button
                                 onClick={fetchExchangeRates}
                                 disabled={ratesLoading}
-                                className="bg-white/20 hover:bg-white/30 p-2 rounded-lg transition-colors"
+                                className="btn-secondary py-1 px-3"
                                 title="Kurları Güncelle"
                             >
                                 <RefreshCw className={'h-4 w-4 ' + (ratesLoading ? 'animate-spin' : '')} />
@@ -696,152 +1072,146 @@ export default function App() {
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-4">
-                        <div className="bg-white/10 rounded-lg p-4">
-                            <div className="text-indigo-200 text-sm">USD / TRY</div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div className="bg-gray-50 border border-gray-100 p-4 rounded-sm">
+                            <div className="label-industrial text-indigo-600">USD / TRY (1 $)</div>
                             {useManualRates ? (
                                 <input
                                     type="number"
                                     step="0.01"
-                                    value={manualRates.TRY}
-                                    onChange={e => setManualRates({ ...manualRates, TRY: e.target.value })}
-                                    placeholder={rates.TRY.toFixed(4)}
-                                    className="bg-white/20 text-white text-2xl font-bold w-full rounded p-1 mt-1"
+                                    value={manualRates.usd_try}
+                                    onChange={e => setManualRates({ ...manualRates, usd_try: e.target.value })}
+                                    placeholder={exchangeRates.TRY.toFixed(2)}
+                                    className="input-industrial font-mono text-lg text-indigo-700 font-bold"
                                 />
                             ) : (
-                                <div className="text-2xl font-bold">{rates.TRY.toFixed(4)}</div>
+                                <div className="text-2xl font-semibold text-gray-900 tracking-tight">{rates.TRY.toFixed(4)}</div>
                             )}
                         </div>
-                        <div className="bg-white/10 rounded-lg p-4">
-                            <div className="text-indigo-200 text-sm">EUR / USD</div>
+                        <div className="bg-gray-50 border border-gray-100 p-4 rounded-sm">
+                            <div className="label-industrial text-indigo-600">EUR / TRY (1 €)</div>
                             {useManualRates ? (
                                 <input
                                     type="number"
-                                    step="0.0001"
-                                    value={manualRates.EUR}
-                                    onChange={e => setManualRates({ ...manualRates, EUR: e.target.value })}
-                                    placeholder={rates.EUR.toFixed(4)}
-                                    className="bg-white/20 text-white text-2xl font-bold w-full rounded p-1 mt-1"
+                                    step="0.01"
+                                    value={manualRates.eur_try}
+                                    onChange={e => setManualRates({ ...manualRates, eur_try: e.target.value })}
+                                    placeholder={((1 / exchangeRates.EUR) * exchangeRates.TRY).toFixed(2)}
+                                    className="input-industrial font-mono text-lg text-indigo-700 font-bold"
                                 />
                             ) : (
-                                <div className="text-2xl font-bold">{rates.EUR.toFixed(4)}</div>
+                                <div className="text-2xl font-semibold text-gray-900 tracking-tight">
+                                    {((1 / rates.EUR) * rates.TRY).toFixed(4)}
+                                </div>
                             )}
                         </div>
-                        <div className="bg-white/10 rounded-lg p-4">
-                            <div className="text-indigo-200 text-sm">EUR / TRY</div>
-                            <div className="text-2xl font-bold">{(rates.TRY / rates.EUR).toFixed(4)}</div>
+                        <div className="bg-gray-50 border border-gray-100 p-4 rounded-sm">
+                            <div className="label-industrial">BAZ GÖRÜNÜM PARA BİRİMİ</div>
+                            <div className="text-2xl font-semibold text-[#0071e3] tracking-tight">{baseCurrency}</div>
                         </div>
                     </div>
                 </div>
 
                 {/* Summary Cards */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                    <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-blue-500">
-                        <div className="flex items-center gap-3">
-                            <div className="bg-blue-100 p-3 rounded-lg">
-                                <ShoppingBag className="h-6 w-6 text-blue-600" />
-                            </div>
-                            <div>
-                                <div className="text-slate-500 text-sm font-medium">Toplam Alım</div>
-                                <div className="text-2xl font-bold text-slate-800">{formatMoney(totalPurchases, baseCurrency)}</div>
-                                <div className="text-xs text-slate-400">{purchases.length} işlem</div>
-                            </div>
+                    <div className="card-industrial p-5 flex items-center gap-4">
+                        <div className="bg-[#e8f2ff] p-3 rounded-[4px] border border-[#d0e6ff]">
+                            <ShoppingBag className="h-6 w-6 text-[#0071e3]" />
+                        </div>
+                        <div>
+                            <div className="label-industrial">TOPLAM SATINALMA</div>
+                            <div className="heading-industrial text-xl">{formatMoney(totalPurchases, baseCurrency)}</div>
+                            <div className="text-xs text-[#86868b] font-mono mt-1">{purchases.length} KAYIT</div>
                         </div>
                     </div>
 
-                    <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-green-500">
-                        <div className="flex items-center gap-3">
-                            <div className="bg-green-100 p-3 rounded-lg">
-                                <TrendingUp className="h-6 w-6 text-green-600" />
-                            </div>
-                            <div>
-                                <div className="text-slate-500 text-sm font-medium">Toplam Satış</div>
-                                <div className="text-2xl font-bold text-slate-800">{formatMoney(totalSales, baseCurrency)}</div>
-                                <div className="text-xs text-slate-400">{sales.length} işlem</div>
-                            </div>
+                    <div className="card-industrial p-5 flex items-center gap-4">
+                        <div className="bg-[#eafaef] p-3 rounded-[4px] border border-[#cff7d9]">
+                            <TrendingUp className="h-6 w-6 text-[#107c10]" />
+                        </div>
+                        <div>
+                            <div className="label-industrial">TOPLAM SATIŞ</div>
+                            <div className="heading-industrial text-xl">{formatMoney(totalSales, baseCurrency)}</div>
+                            <div className="text-xs text-[#86868b] font-mono mt-1">{sales.length} KAYIT</div>
                         </div>
                     </div>
 
-                    <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-purple-500">
-                        <div className="flex items-center gap-3">
-                            <div className="bg-purple-100 p-3 rounded-lg">
-                                <Factory className="h-6 w-6 text-purple-600" />
-                            </div>
-                            <div>
-                                <div className="text-slate-500 text-sm font-medium">Üretim Değeri</div>
-                                <div className="text-2xl font-bold text-slate-800">{formatMoney(totalProduction, baseCurrency)}</div>
-                                <div className="text-xs text-slate-400">{productions.length} üretim</div>
-                            </div>
+                    <div className="card-industrial p-5 flex items-center gap-4">
+                        <div className="bg-[#f5f5f7] p-3 rounded-[4px] border border-[#d2d2d7]">
+                            <Factory className="h-6 w-6 text-[#86868b]" />
+                        </div>
+                        <div>
+                            <div className="label-industrial">ÜRETİM DEĞERİ</div>
+                            <div className="heading-industrial text-xl">{formatMoney(totalProduction, baseCurrency)}</div>
+                            <div className="text-xs text-[#86868b] font-mono mt-1">{productions.length} PARTİ</div>
                         </div>
                     </div>
 
-                    <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-orange-500">
-                        <div className="flex items-center gap-3">
-                            <div className="bg-orange-100 p-3 rounded-lg">
-                                <Briefcase className="h-6 w-6 text-orange-600" />
-                            </div>
-                            <div>
-                                <div className="text-slate-500 text-sm font-medium">Cari Hesaplar</div>
-                                <div className="text-2xl font-bold text-slate-800">{accounts.length}</div>
-                                <div className="text-xs text-slate-400">{accounts.filter(a => a.type === 'Müşteri' || a.type === 'Her İkisi').length} müşteri</div>
-                            </div>
+                    <div className="card-industrial p-5 flex items-center gap-4">
+                        <div className="bg-[#fffbe6] p-3 rounded-[4px] border border-[#fff1b8]">
+                            <Briefcase className="h-6 w-6 text-[#e67e22]" />
+                        </div>
+                        <div>
+                            <div className="label-industrial">CARİ HESAPLAR</div>
+                            <div className="heading-industrial text-xl">{accounts.length}</div>
+                            <div className="text-xs text-[#86868b] font-mono mt-1">{accounts.filter(a => a.type === 'Müşteri' || a.type === 'Her İkisi').length} MÜŞTERİ</div>
                         </div>
                     </div>
                 </div>
 
-                {/* Stock Summary */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <div className="bg-white p-6 rounded-xl shadow-lg">
-                        <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
-                            <Package className="h-5 w-5 text-blue-600" /> Hammadde Stoku
+                {/* Stock Summary - INDUSTRIAL */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6">
+                    <div className="card-industrial p-5">
+                        <h3 className="heading-industrial text-sm flex items-center gap-2 mb-4 border-b border-gray-100 pb-2">
+                            <Package className="h-4 w-4 text-[#0071e3]" /> HAMMADDELER
                         </h3>
-                        <div className="space-y-3">
+                        <div className="space-y-2">
                             {rawMaterials.slice(0, 5).map(item => {
                                 const stock = getItemStock(item.id);
                                 return (
-                                    <div key={item.id} className="flex justify-between items-center">
-                                        <span className="text-sm text-slate-600">{item.name}</span>
-                                        <span className="font-bold text-slate-800">{stock.toFixed(2)} {item.unit}</span>
+                                    <div key={item.id} className="flex justify-between items-center text-sm">
+                                        <span className="text-gray-600">{item.name}</span>
+                                        <span className="font-mono font-medium text-gray-900">{stock.toFixed(2)} {item.unit}</span>
                                     </div>
                                 );
                             })}
-                            {rawMaterials.length === 0 && <p className="text-slate-400 text-sm">Henüz hammadde yok</p>}
+                            {rawMaterials.length === 0 && <p className="text-gray-400 text-xs italic">Hammadde bulunamadı.</p>}
                         </div>
                     </div>
 
-                    <div className="bg-white p-6 rounded-xl shadow-lg">
-                        <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
-                            <Package className="h-5 w-5 text-green-600" /> Mamul Stoku
+                    <div className="card-industrial p-5">
+                        <h3 className="heading-industrial text-sm flex items-center gap-2 mb-4 border-b border-gray-100 pb-2">
+                            <Package className="h-4 w-4 text-[#107c10]" /> MAMULLER
                         </h3>
-                        <div className="space-y-3">
+                        <div className="space-y-2">
                             {products.slice(0, 5).map(item => {
                                 const stock = getItemStock(item.id);
                                 return (
-                                    <div key={item.id} className="flex justify-between items-center">
-                                        <span className="text-sm text-slate-600">{item.name}</span>
-                                        <span className="font-bold text-slate-800">{stock.toFixed(2)} {item.unit}</span>
+                                    <div key={item.id} className="flex justify-between items-center text-sm">
+                                        <span className="text-gray-600">{item.name}</span>
+                                        <span className="font-mono font-medium text-gray-900">{stock.toFixed(2)} {item.unit}</span>
                                     </div>
                                 );
                             })}
-                            {products.length === 0 && <p className="text-slate-400 text-sm">Henüz mamul yok</p>}
+                            {products.length === 0 && <p className="text-gray-400 text-xs italic">Mamul bulunamadı.</p>}
                         </div>
                     </div>
 
-                    <div className="bg-white p-6 rounded-xl shadow-lg">
-                        <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
-                            <Package className="h-5 w-5 text-purple-600" /> Ambalaj Stoku
+                    <div className="card-industrial p-5">
+                        <h3 className="heading-industrial text-sm flex items-center gap-2 mb-4 border-b border-gray-100 pb-2">
+                            <Package className="h-4 w-4 text-[#86868b]" /> AMBALAJ
                         </h3>
-                        <div className="space-y-3">
+                        <div className="space-y-2">
                             {packaging.slice(0, 5).map(item => {
                                 const stock = getItemStock(item.id);
                                 return (
-                                    <div key={item.id} className="flex justify-between items-center">
-                                        <span className="text-sm text-slate-600">{item.name}</span>
-                                        <span className="font-bold text-slate-800">{stock.toFixed(0)} adet</span>
+                                    <div key={item.id} className="flex justify-between items-center text-sm">
+                                        <span className="text-gray-600">{item.name}</span>
+                                        <span className="font-mono font-medium text-gray-900">{stock.toFixed(0)} adet</span>
                                     </div>
                                 );
                             })}
-                            {packaging.length === 0 && <p className="text-slate-400 text-sm">Henüz ambalaj yok</p>}
+                            {packaging.length === 0 && <p className="text-gray-400 text-xs italic">Ambalaj bulunamadı.</p>}
                         </div>
                     </div>
                 </div>
@@ -852,9 +1222,9 @@ export default function App() {
     // ==================== LOADING & AUTH ====================
     if (loading) {
         return (
-            <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+            <div className="min-h-screen bg-[#1d1d1f] flex items-center justify-center">
                 <div className="text-center">
-                    <FlaskConical className="h-16 w-16 text-indigo-500 mx-auto mb-4 animate-pulse" />
+                    <FlaskConical className="h-16 w-16 text-[#0071e3] mx-auto mb-4 animate-pulse" />
                     <div className="text-white text-xl">Yükleniyor...</div>
                 </div>
             </div>
@@ -867,9 +1237,9 @@ export default function App() {
 
     if (roleLoading) {
         return (
-            <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+            <div className="min-h-screen bg-[#1d1d1f] flex items-center justify-center">
                 <div className="text-center">
-                    <Shield className="h-16 w-16 text-indigo-500 mx-auto mb-4 animate-pulse" />
+                    <Shield className="h-16 w-16 text-[#0071e3] mx-auto mb-4 animate-pulse" />
                     <div className="text-white text-xl">Yetkiler Kontrol Ediliyor...</div>
                 </div>
             </div>
@@ -877,132 +1247,159 @@ export default function App() {
     }
 
     return (
-        <div className="min-h-screen bg-slate-100 flex flex-col md:flex-row h-screen overflow-hidden">
+        <div className="min-h-screen bg-white flex flex-col md:flex-row h-screen overflow-hidden text-slate-900">
             {/* Mobile Header */}
-            <div className="md:hidden bg-slate-900 text-white p-4 flex justify-between items-center shrink-0">
+            <div className="md:hidden bg-[#0a0a0c] text-white p-4 flex justify-between items-center shrink-0 border-b border-white/5">
                 <div className="flex items-center gap-2">
-                    <FlaskConical className="h-6 w-6 text-indigo-500" />
-                    <span className="font-bold text-lg">GROHN Kimya</span>
+                    <div className="w-8 h-8 rounded-lg bg-indigo-600/20 flex items-center justify-center border border-indigo-500/30">
+                        <FlaskConical className="h-4 w-4 text-indigo-400" />
+                    </div>
+                    <span className="font-bold text-lg tracking-tight">GROHN <span className="text-indigo-400 font-light text-sm ml-1">ERP</span></span>
                 </div>
-                <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="text-slate-300 hover:text-white">
+                <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="text-zinc-500 hover:text-white transition-colors">
                     {isMobileMenuOpen ? <X /> : <Menu />}
                 </button>
             </div>
 
             {/* Sidebar */}
-            <div className={`fixed inset-y-0 left-0 z-50 w-64 bg-slate-900 text-white flex flex-col transition-transform duration-300 md:relative md:translate-x-0 ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-                <div className="p-6">
-                    <div className="flex items-center justify-between mb-6">
-                        <div className="flex items-center gap-3">
-                            <FlaskConical className="h-8 w-8 text-indigo-500" />
-                            <h1 className="text-xl font-bold">GROHN Kimya</h1>
-                        </div>
-                        {/* Close button for mobile inside sidebar */}
-                        <button onClick={() => setIsMobileMenuOpen(false)} className="md:hidden text-slate-400 hover:text-white">
-                            <X className="h-6 w-6" />
-                        </button>
+            <div className={`fixed inset-y-0 left-0 z-50 w-72 bg-[#0a0a0c] text-white flex flex-col transition-transform duration-300 md:relative md:translate-x-0 border-r border-white/5 shadow-2xl ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+                <div className="p-6 flex-1 overflow-y-auto no-scrollbar">
+                    {/* Premium Branding Logo */}
+                    {/* Simple Premium Logo */}
+                    <div className="mb-14 px-4 group cursor-default">
+                        <h1 className="text-3xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-br from-white via-white to-zinc-600 transition-all duration-500 group-hover:tracking-normal">
+                            GROHN
+                        </h1>
+                        <div className="h-1 w-12 bg-indigo-600 mt-2 rounded-full transition-all duration-500 group-hover:w-20"></div>
                     </div>
-                    <div className="text-xs text-slate-400 uppercase font-bold mb-2">Menü</div>
-                    <nav className="space-y-2">
-                        <button onClick={() => setActiveTab('dashboard')} className={'w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ' + (activeTab === 'dashboard' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white')}>
-                            <LayoutDashboard className="h-5 w-5" /> Dashboard
-                        </button>
-                        <button onClick={() => setActiveTab('accounts')} className={'w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ' + (activeTab === 'accounts' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white')}>
-                            <Briefcase className="h-5 w-5" /> Cari Hesaplar
-                        </button>
-                        <button onClick={() => setActiveTab('purchasing')} className={'w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ' + (activeTab === 'purchasing' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white')}>
-                            <ShoppingBag className="h-5 w-5" /> Satınalma
-                        </button>
-                        <button onClick={() => setActiveTab('sales')} className={'w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ' + (activeTab === 'sales' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white')}>
-                            <DollarSign className="h-5 w-5" /> Satış
-                        </button>
-                        <button onClick={() => setActiveTab('recipes')} className={'w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ' + (activeTab === 'recipes' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white')}>
-                            <Beaker className="h-5 w-5" /> Reçeteler
-                        </button>
-                        <button onClick={() => setActiveTab('production')} className={'w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ' + (activeTab === 'production' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white')}>
-                            <Factory className="h-5 w-5" /> Üretim
-                        </button>
-                        <button onClick={() => setActiveTab('stock_history')} className={'w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ' + (activeTab === 'stock_history' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white')}>
-                            <History className="h-5 w-5" /> Stok Geçmişi
-                        </button>
 
-                        <button onClick={() => setActiveTab('calculator')} className={'w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ' + (activeTab === 'calculator' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white')}>
-                            <Calculator className="h-5 w-5" /> Fiyat Hesapla
-                        </button>
-                        <button onClick={() => setActiveTab('quality_control')} className={'w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ' + (activeTab === 'quality_control' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white')}>
-                            <ClipboardCheck className="h-5 w-5" /> Kalite Kontrol
-                        </button>
+                    <div className="space-y-8">
+                        {/* Main Section */}
+                        <div className="space-y-1.5">
+                            <SidebarItem
+                                active={activeTab === 'dashboard'}
+                                onClick={() => { setActiveTab('dashboard'); setIsMobileMenuOpen(false); }}
+                                icon={<LayoutDashboard className="h-4 w-4" />}
+                                label="Genel Görünüm"
+                            />
+                            <SidebarItem
+                                active={activeTab === 'commercial_management'}
+                                onClick={() => { setActiveTab('commercial_management'); setIsMobileMenuOpen(false); }}
+                                icon={<ShoppingBag className="h-4 w-4" />}
+                                label="Satın Alma"
+                            />
+                            <SidebarItem
+                                active={activeTab === 'recipes'}
+                                onClick={() => { setActiveTab('recipes'); setIsMobileMenuOpen(false); }}
+                                icon={<FileText className="h-4 w-4" />}
+                                label="Reçeteler"
+                            />
+                            <SidebarItem
+                                active={activeTab === 'production'}
+                                onClick={() => { setActiveTab('production'); setIsMobileMenuOpen(false); }}
+                                icon={<Factory className="h-4 w-4" />}
+                                label="Üretim Yönetimi"
+                            />
+                            <SidebarItem
+                                active={activeTab === 'quality_control'}
+                                onClick={() => { setActiveTab('quality_control'); setIsMobileMenuOpen(false); }}
+                                icon={<ShieldCheck className="h-4 w-4" />}
+                                label="Kalite Kontrol"
+                            />
+                            <SidebarItem
+                                active={activeTab === 'marketing'}
+                                onClick={() => { setActiveTab('marketing'); setIsMobileMenuOpen(false); }}
+                                icon={<Users className="h-4 w-4" />}
+                                label="Pazarlama & CRM"
+                            />
+                            <SidebarItem
+                                active={activeTab === 'sales_manager'}
+                                onClick={() => { setActiveTab('sales_manager'); setIsMobileMenuOpen(false); }}
+                                icon={<ShoppingCart className="h-4 w-4" />}
+                                label="Satış"
+                            />
+                            <SidebarItem
+                                active={activeTab === 'inventory_management'}
+                                onClick={() => { setActiveTab('inventory_management'); setIsMobileMenuOpen(false); }}
+                                icon={<Package className="h-4 w-4" />}
+                                label="Stok Yönetimi"
+                            />
+                            {canViewFinancials && (
+                                <SidebarItem
+                                    active={activeTab === 'financials'}
+                                    onClick={() => { setActiveTab('financials'); setIsMobileMenuOpen(false); }}
+                                    icon={<TrendingUp className="h-4 w-4" />}
+                                    label="Raporlar"
+                                />
+                            )}
+                        </div>
 
-                        {canViewFinancials && (
-                            <button onClick={() => setActiveTab('financials')} className={'w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ' + (activeTab === 'financials' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white')}>
-                                <TrendingUp className="h-5 w-5" /> Finansal Raporlar
-                            </button>
-                        )}
-
+                        {/* Administration Section */}
                         {userRole === 'admin' && (
-                            <button onClick={() => setActiveTab('roles')} className={'w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ' + (activeTab === 'roles' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white')}>
-                                <Users className="h-5 w-5" /> Kullanıcılar
-                            </button>
-                        )}
-                    </nav>
-                </div>
-                <div className="mt-auto p-6 border-t border-slate-800">
-                    <div className="flex items-center gap-3 mb-4">
-                        <div className="w-10 h-10 rounded-full bg-indigo-500 flex items-center justify-center font-bold">
-                            {user.email[0].toUpperCase()}
-                        </div>
-                        <div className="overflow-hidden">
-                            <div className="text-sm font-medium truncate">{user.email}</div>
-                            <div className="flex items-center gap-1 text-xs text-slate-400">
-                                <Shield className="h-3 w-3" />
-                                {userRole === 'admin' ? 'Yönetici' : userRole === 'operator' ? 'Operatör' : 'İzleyici'}
+                            <div className="space-y-1.5">
+                                <SidebarItem
+                                    active={activeTab === 'settings'}
+                                    onClick={() => { setActiveTab('settings'); setIsMobileMenuOpen(false); }}
+                                    icon={<Settings className="h-4 w-4" />}
+                                    label="Genel Ayarlar"
+                                />
                             </div>
-                        </div>
+                        )}
                     </div>
-                    <button onClick={handleSignOut} className="w-full flex items-center gap-2 text-slate-400 hover:text-white transition-colors">
-                        <LogOut className="h-5 w-5" /> Çıkış Yap
-                    </button>
                 </div>
-            </div>
+
+                {/* Sidebar Footer with Gradient Mask */}
+                <div className="p-6 border-t border-white/5 bg-gradient-to-b from-[#0a0a0c] to-[#050505]">
+                    <div className="text-[10px] text-center text-zinc-600 font-medium tracking-tight">
+                        &copy; 2025 Grohn Teknoloji Ekosistemi
+                    </div>
+                </div>
+            </div >
 
 
             {/* Overlay for mobile */}
-            {isMobileMenuOpen && (
-                <div
-                    className="fixed inset-0 bg-black/50 z-40 md:hidden"
-                    onClick={() => setIsMobileMenuOpen(false)}
-                />
-            )}
+            {
+                isMobileMenuOpen && (
+                    <div
+                        className="fixed inset-0 bg-black/50 z-40 md:hidden"
+                        onClick={() => setIsMobileMenuOpen(false)}
+                    />
+                )
+            }
 
             {/* Main Content */}
             <div className="flex-1 overflow-auto w-full relative">
                 <div className="p-4 md:p-8">
                     {activeTab === 'dashboard' && <Dashboard />}
-                    {activeTab === 'accounts' && <CurrentAccountsModule
-                        accounts={accounts}
-                        sales={sales}
-                        purchases={purchases}
-                        onAdd={handleAddAccount}
-                        onDelete={handleDeleteAccount}
-                    />}
-                    {activeTab === 'purchasing' && <PurchasingModule
+                    {activeTab === 'commercial_management' && <CommercialManagementModule
                         purchases={purchases}
                         inventory={inventory}
-                        suppliers={accounts}
+                        accounts={accounts}
                         onPurchase={handlePurchase}
-                        onDelete={handleDeletePurchase}
+                        onDeletePurchase={handleDeletePurchase}
+                        onUpdatePurchase={handleUpdatePurchase}
+                        onAddAccount={handleAddAccount}
+                        onDeleteAccount={handleDeleteAccount}
+                        sales={sales}
                     />}
-                    {activeTab === 'sales' && <SalesModule
+                    {activeTab === 'sales_manager' && <SalesManagerModule
                         sales={sales}
                         inventory={inventory}
                         accounts={accounts}
                         productions={productions}
+                        recipes={recipes}
+                        globalSettings={globalSettings}
                         onSale={handleSale}
+                        onDeleteSale={handleDeleteSale}
+                        onUpdateSale={handleUpdateSale}
+                        exchangeRates={getActiveRates()}
+                        onRefresh={loadAllData}
                     />}
                     {activeTab === 'recipes' && <RecipesModule
                         recipes={recipes}
                         inventory={inventory}
                         customers={accounts.filter(a => a.type === 'Müşteri' || a.type === 'Her İkisi')}
+                        globalSettings={globalSettings}
                         onSave={handleSaveRecipe}
                         onDelete={handleDeleteRecipe}
                     />}
@@ -1013,14 +1410,35 @@ export default function App() {
                         recipes={recipes}
                         inventory={inventory}
                         qualitySpecs={qualitySpecs}
+                        globalSettings={globalSettings}
                         customers={accounts.filter(a => a.type === 'Müşteri' || a.type === 'Her İkisi')}
                         onPlan={handlePlanProduction}
                         onComplete={handleCompleteProduction}
                         onDelete={handleDeleteProduction}
                     />}
-                    {activeTab === 'stock_history' && <StockHistoryModule inventory={inventory} />}
-                    {activeTab === 'calculator' && <PriceCalculatorModule recipes={recipes} inventory={inventory} exchangeRates={getActiveRates()} />}
-                    {activeTab === 'quality_control' && <QualityControlModule inventory={inventory} onRefresh={loadAllData} />}
+                    {activeTab === 'inventory_management' && (
+                        <InventoryManagementModule
+                            inventory={inventory}
+                            onRefresh={loadAllData}
+                            onReconcile={handleStockReconciliation}
+                            onDeleteMovement={handleDeleteStockMovement}
+                            getItemStock={getItemStock}
+                            accounts={accounts}
+                            ibcMovements={ibcMovements}
+                            onIbcReturn={handleIbcReturn}
+                            onDeleteIbcMovement={handleDeleteIbcMovement}
+                            globalSettings={globalSettings}
+                        />
+                    )}
+                    {activeTab === 'quality_control' && <QualityControlModule inventory={inventory} globalSettings={globalSettings} onRefresh={loadAllData} />}
+                    {activeTab === 'marketing' && <MarketingModule
+                        inventory={inventory}
+                        accounts={accounts}
+                        onRefresh={loadAllData}
+                        currentOwnerId={currentOwnerId}
+                        userRole={userRole}
+                        user={user}
+                    />}
                     {activeTab === 'financials' && canViewFinancials && <FinancialReportsModule
                         sales={sales}
                         productions={productions}
@@ -1029,10 +1447,16 @@ export default function App() {
                         accounts={accounts}
                         exchangeRates={getActiveRates()}
                     />}
-                    {activeTab === 'roles' && userRole === 'admin' && <RoleManagementModule currentUser={user} />}
+                    {activeTab === 'settings' && userRole === 'admin' && <SettingsModule
+                        globalSettings={globalSettings}
+                        onSaveSetting={saveSetting}
+                        currentUser={user}
+                        onSignOut={handleSignOut}
+                        userRole={userRole}
+                    />}
                 </div>
             </div>
-        </div>
+        </div >
     );
 }
 

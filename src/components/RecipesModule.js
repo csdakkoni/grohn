@@ -3,8 +3,9 @@ import { Trash2, Plus, Beaker, Save, X, Search, Edit, Printer, Filter } from 'lu
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { turkishToEnglish, preparePDFWithFont } from '../utils/exportUtils';
+import { drawCIHeader, drawCIFooter, drawCIMetadataGrid, drawCIWrappedText, CI_PALETTE } from '../utils/pdfCIUtils';
 
-export default function RecipesModule({ recipes, inventory, customers, onSave, onDelete }) {
+export default function RecipesModule({ recipes, inventory, customers, globalSettings = {}, onSave, onDelete }) {
     const [showForm, setShowForm] = useState(false);
 
     // Standardized Filter State
@@ -19,6 +20,7 @@ export default function RecipesModule({ recipes, inventory, customers, onSave, o
         isNewProduct: false,
         newProductName: '',
         density: 1.0,
+        ghsSymbols: [],
         customerId: '',
         ingredients: []
     });
@@ -75,7 +77,10 @@ export default function RecipesModule({ recipes, inventory, customers, onSave, o
             newProductName: '',
             density: 1.0,
             customerId: recipe.customer_id || '',
-            ingredients: recipe.ingredients.map(i => ({ itemId: i.itemId, percentage: i.percentage }))
+            ingredients: recipe.ingredients.map(i => ({
+                itemId: i.itemId || i.item_id,
+                percentage: i.percentage
+            }))
         });
         setShowForm(true);
     };
@@ -106,39 +111,25 @@ export default function RecipesModule({ recipes, inventory, customers, onSave, o
         const doc = await preparePDFWithFont();
         const fontName = doc.activeFont || 'helvetica';
 
-        // --- HEADER ---
-        doc.setFillColor(79, 70, 229); // Indigo-600
-        doc.rect(0, 0, 210, 40, 'F');
+        // Initial Header (Professional Layout)
+        const docDate = new Date().toLocaleDateString('tr-TR');
+        drawCIHeader(doc, 'ANA REÇETE FORMU', 'REÇETE YÖNETİM MERKEZİ', docDate, `RCT-${recipe.id}`);
+        const startY = 45;
 
-        doc.setTextColor(255, 255, 255);
-        doc.setFontSize(24);
-        doc.setFont(fontName, 'bold');
-        doc.text('REÇETE DETAYI', 105, 20, null, null, 'center');
+        // Metadata Grid (Cleaned)
+        const metaData = [
+            { label: 'ÜRÜN ADI', value: product?.name || '-' },
+            { label: 'MÜŞTERİ', value: customer?.name || 'Genel Reçete' },
+            { label: 'YOĞUNLUK', value: `${product?.density || '-'} g/ml` }
+        ];
 
-        doc.setFontSize(10);
-        doc.text('GROHN Kimya A.Ş.', 105, 30, null, null, 'center');
-
-        // --- INFO BOX ---
-        doc.setTextColor(0, 0, 0);
-        doc.setFontSize(11);
-        doc.setFont(fontName, 'normal');
-
-        const startY = 50;
-
-        // Left Column
-        doc.setFont(fontName, 'bold');
-        doc.text('Ürün Adı:', 14, startY);
-        doc.text('Müşteri:', 14, startY + 8);
-        doc.text('Yoğunluk:', 14, startY + 16);
-
-        doc.setFont(fontName, 'normal');
-        doc.text(product?.name || '-', 50, startY);
-        doc.text(customer?.name || 'Genel Reçete', 50, startY + 8);
-        doc.text(`${product?.density || '-'} g/ml`, 50, startY + 16);
+        let currY = drawCIMetadataGrid(doc, 14, startY, metaData, 2);
+        currY += 5;
 
         // --- INGREDIENTS TABLE ---
         const tableData = recipe.ingredients.map(ing => {
-            const item = inventory.find(i => i.id === parseInt(ing.itemId));
+            const currentItemId = ing.itemId || ing.item_id;
+            const item = inventory.find(i => i.id === parseInt(currentItemId));
             return [
                 item?.name || '?',
                 item?.product_code || item?.id?.toString() || '-',
@@ -147,22 +138,23 @@ export default function RecipesModule({ recipes, inventory, customers, onSave, o
         });
 
         autoTable(doc, {
-            startY: startY + 25,
+            startY: currY,
             head: [['Hammadde', 'Stok Kodu', 'Oran']],
             body: tableData,
             theme: 'grid',
-            headStyles: { fillColor: [79, 70, 229], textColor: 255 },
+            headStyles: { fillColor: CI_PALETTE.apple_blue, textColor: 255 },
             styles: { fontSize: 10, cellPadding: 3, font: fontName },
             foot: [['TOPLAM', '', `%${recipe.ingredients.reduce((s, i) => s + parseFloat(i.percentage), 0).toFixed(2)}`]],
-            footStyles: { fillColor: [240, 240, 240], textColor: 0, fontStyle: 'bold' }
+            footStyles: { fillColor: [240, 240, 240], textColor: 0, fontStyle: 'bold' },
+            margin: { top: 40, bottom: 30 },
+            didDrawPage: (data) => {
+                const docDate = new Date().toLocaleDateString('tr-TR');
+                drawCIHeader(doc, 'ANA REÇETE FORMU', 'REÇETE YÖNETİM MERKEZİ', docDate, `RCT-${recipe.id}`);
+                drawCIFooter(doc, globalSettings, 'Reçete Yönetim Sistemi v4.1.0');
+            }
         });
 
-        // Current Date Footer
-        doc.setFontSize(8);
-        doc.setTextColor(150);
-        doc.text(`Oluşturma Tarihi: ${new Date().toLocaleDateString('tr-TR')}`, 14, 290);
-
-        doc.save(`recete_${product?.name || 'detay'}.pdf`);
+        doc.save(`RecipeMaster_${product?.name || 'detay'}.pdf`);
     };
 
     const RecipeDetailModal = ({ recipe, onClose }) => {
@@ -171,71 +163,71 @@ export default function RecipesModule({ recipes, inventory, customers, onSave, o
         const customer = customers.find(c => c.id === recipe.customer_id);
 
         return (
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={onClose}>
-                <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
-                    <div className="bg-slate-50 p-4 border-b border-slate-200 flex justify-between items-center">
-                        <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                            <Beaker className="h-5 w-5 text-indigo-600" />
+            <div className="modal-overlay-industrial flex items-center justify-center z-50 p-4" onClick={onClose}>
+                <div className="modal-content-industrial w-full max-w-2xl" onClick={e => e.stopPropagation()}>
+                    <div className="modal-header-industrial">
+                        <h3 className="text-sm font-bold text-[#1d1d1f] uppercase tracking-wide flex items-center gap-2">
+                            <Beaker className="h-4 w-4 text-[#0071e3]" />
                             Reçete Detayı
                         </h3>
-                        <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
-                            <X className="h-6 w-6" />
-                        </button>
+                        <div className="flex items-center gap-3">
+                            <button
+                                onClick={() => handlePrintRecipe(recipe)}
+                                className="text-[#0071e3] hover:text-[#0077ed] text-xs font-bold uppercase tracking-wider flex items-center gap-1 transition-colors"
+                            >
+                                <Printer className="h-3 w-3" /> Yazdır
+                            </button>
+                            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
+                                <X className="h-5 w-5" />
+                            </button>
+                        </div>
                     </div>
 
-                    <div className="absolute top-4 right-14">
-                        <button
-                            onClick={() => handlePrintRecipe(recipe)}
-                            className="bg-indigo-50 text-indigo-600 hover:bg-indigo-100 p-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-colors"
-                        >
-                            <Printer className="h-4 w-4" /> Yazdır
-                        </button>
-                    </div>
-
-                    <div className="p-6 space-y-6">
-                        <div className="grid grid-cols-2 gap-4">
+                    <div className="modal-body-industrial space-y-6">
+                        <div className="grid grid-cols-3 gap-4">
                             <div>
-                                <label className="block text-xs font-bold text-slate-400 uppercase">Ürün</label>
-                                <div className="text-lg font-medium text-slate-800">{product?.name || 'Bilinmeyen Ürün'}</div>
+                                <label className="block text-[10px] font-bold text-[#86868b] uppercase tracking-wider">Ürün</label>
+                                <div className="text-sm font-bold text-[#1d1d1f]">{product?.name || 'Bilinmeyen Ürün'}</div>
                             </div>
                             <div>
-                                <label className="block text-xs font-bold text-slate-400 uppercase">Müşteri</label>
-                                <div className="text-lg font-medium text-slate-800">{customer?.name || 'Genel Reçete'}</div>
+                                <label className="block text-[10px] font-bold text-[#86868b] uppercase tracking-wider">Müşteri</label>
+                                <div className="text-sm font-bold text-[#1d1d1f]">{customer?.name || 'Genel Reçete'}</div>
                             </div>
                             <div>
-                                <label className="block text-xs font-bold text-slate-400 uppercase">Yoğunluk</label>
-                                <div className="text-lg font-medium text-slate-800">{product?.density || '-'} g/ml</div>
+                                <label className="block text-[10px] font-bold text-[#86868b] uppercase tracking-wider">Yoğunluk</label>
+                                <div className="text-sm font-bold text-[#1d1d1f] font-mono">{product?.density || '-'} g/ml</div>
                             </div>
                         </div>
 
                         <div>
-                            <h4 className="font-bold text-slate-700 mb-2 border-b pb-1">İçerik (Hammadde Listesi)</h4>
-                            <div className="bg-slate-50 rounded-lg border border-slate-200 overflow-hidden">
-                                <table className="w-full text-sm text-left">
-                                    <thead className="bg-slate-100 text-slate-600 font-semibold">
+                            <h4 className="font-bold text-[#1d1d1f] text-xs uppercase tracking-wide mb-2 border-b border-[#d2d2d7] pb-1">İçerik (Hammadde Listesi)</h4>
+                            <div className="bg-[#f5f5f7] rounded-[6px] border border-[#d2d2d7] overflow-hidden">
+                                <table className="w-full text-xs text-left">
+                                    <thead className="bg-[#e5e5ea] text-[#86868b] font-bold border-b border-[#d2d2d7]">
                                         <tr>
-                                            <th className="p-3">Hammadde</th>
-                                            <th className="p-3 text-right">Oran (%)</th>
+                                            <th className="p-2 pl-3">Hammadde</th>
+                                            <th className="p-2 text-right pr-3">Oran (%)</th>
                                         </tr>
                                     </thead>
-                                    <tbody className="divide-y divide-slate-200">
+                                    <tbody className="divide-y divide-[#d2d2d7]">
                                         {recipe.ingredients.map((ing, idx) => {
-                                            const item = inventory.find(i => i.id === parseInt(ing.itemId));
+                                            const currentItemId = ing.itemId || ing.item_id;
+                                            const item = inventory.find(i => i.id === parseInt(currentItemId));
                                             return (
                                                 <tr key={idx}>
-                                                    <td className="p-3 text-slate-800">
-                                                        <span className="text-xs text-slate-400 font-mono mr-2">{item?.product_code || item?.id}</span>
+                                                    <td className="p-2 pl-3 text-[#1d1d1f] font-medium">
+                                                        <span className="text-[10px] text-[#86868b] font-mono mr-2">{item?.product_code || item?.id}</span>
                                                         {item?.name || '?'}
                                                     </td>
-                                                    <td className="p-3 text-right font-medium text-indigo-600">%{ing.percentage}</td>
+                                                    <td className="p-2 pr-3 text-right font-bold text-[#1d1d1f] font-mono">%{ing.percentage}</td>
                                                 </tr>
                                             );
                                         })}
                                     </tbody>
-                                    <tfoot className="bg-slate-50 font-bold text-slate-700">
+                                    <tfoot className="bg-[#f5f5f7] font-bold text-[#1d1d1f] border-t border-[#d2d2d7]">
                                         <tr>
-                                            <td className="p-3 text-right">Toplam:</td>
-                                            <td className="p-3 text-right">
+                                            <td className="p-2 pl-3 text-right uppercase text-[10px] tracking-wider text-[#86868b]">Toplam</td>
+                                            <td className="p-2 pr-3 text-right text-sm">
                                                 %{recipe.ingredients.reduce((sum, i) => sum + parseFloat(i.percentage || 0), 0).toFixed(2)}
                                             </td>
                                         </tr>
@@ -245,10 +237,10 @@ export default function RecipesModule({ recipes, inventory, customers, onSave, o
                         </div>
                     </div>
 
-                    <div className="bg-slate-50 p-4 border-t border-slate-200 flex justify-end">
+                    <div className="modal-footer-industrial">
                         <button
                             onClick={onClose}
-                            className="bg-slate-200 hover:bg-slate-300 text-slate-800 px-4 py-2 rounded-lg font-medium"
+                            className="btn-secondary w-full sm:w-auto"
                         >
                             Kapat
                         </button>
@@ -261,8 +253,8 @@ export default function RecipesModule({ recipes, inventory, customers, onSave, o
     return (
         <div className="space-y-6">
             <div className="flex justify-between items-center">
-                <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-                    <Beaker className="h-6 w-6 text-indigo-600" /> Reçeteler
+                <h2 className="heading-industrial text-2xl flex items-center gap-2">
+                    <Beaker className="h-6 w-6 text-[#0071e3]" /> REÇETELER
                 </h2>
                 <button
                     onClick={() => {
@@ -277,31 +269,31 @@ export default function RecipesModule({ recipes, inventory, customers, onSave, o
                         });
                         setShowForm(true);
                     }}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+                    className="btn-primary flex items-center gap-2"
                 >
                     <Plus className="h-4 w-4" /> Yeni Reçete
                 </button>
             </div>
 
             {/* Standardized Filter Bar */}
-            <div className="bg-white p-4 rounded-xl shadow border border-slate-200 flex flex-wrap gap-4 items-end">
+            <div className="card-industrial p-4 flex flex-wrap gap-4 items-end">
                 <div className="flex-1 min-w-[200px]">
-                    <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Arama</label>
+                    <label className="label-industrial block mb-1">Arama</label>
                     <div className="relative">
-                        <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                        <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
                         <input
                             type="text"
                             placeholder="Ürün veya müşteri ara..."
                             value={filters.search}
                             onChange={(e) => setFilters({ ...filters, search: e.target.value })}
-                            className="w-full pl-9 bg-slate-50 border border-slate-200 rounded-lg p-2 text-sm focus:outline-none focus:border-indigo-500"
+                            className="input-industrial pl-9"
                         />
                     </div>
                 </div>
                 <div className="w-48">
-                    <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Müşteri</label>
+                    <label className="label-industrial block mb-1">Müşteri</label>
                     <select
-                        className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-indigo-500"
+                        className="select-industrial"
                         value={filters.customerId}
                         onChange={e => setFilters({ ...filters, customerId: e.target.value })}
                     >
@@ -322,56 +314,121 @@ export default function RecipesModule({ recipes, inventory, customers, onSave, o
             )}
 
             {showForm && (
-                <div className="bg-white p-6 rounded-xl shadow-lg border border-slate-200 mb-6">
-                    <h3 className="text-lg font-bold mb-4 text-slate-700">
+                <div className="card-industrial p-6 mb-6">
+                    <h3 className="text-lg font-bold mb-4 text-[#1d1d1f] uppercase tracking-tight">
                         {formData.id ? 'Reçete Düzenle' : 'Yeni Reçete'}
                     </h3>
                     <form onSubmit={handleSubmit} className="space-y-6">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div className="space-y-4">
                                 <div>
-                                    <label className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-1">
+                                    <label className="flex items-center gap-2 text-sm font-medium text-[#1d1d1f] mb-1 cursor-pointer w-fit">
                                         <input
                                             type="checkbox"
                                             checked={formData.isNewProduct}
                                             onChange={e => setFormData({ ...formData, isNewProduct: e.target.checked })}
                                             disabled={!!formData.id}
-                                            className="rounded text-indigo-600"
+                                            className="rounded text-[#0071e3] focus:ring-[#0071e3]"
                                         />
                                         Yeni Ürün Tanımla
                                     </label>
                                     {formData.isNewProduct ? (
                                         <div className="flex gap-2">
-                                            <input
-                                                required
-                                                placeholder="Ürün Adı"
-                                                value={formData.newProductName}
-                                                onChange={e => setFormData({ ...formData, newProductName: e.target.value })}
-                                                className="flex-1 border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
-                                            />
+                                            <div className="flex-1">
+                                                <input
+                                                    required
+                                                    placeholder="Ürün Adı"
+                                                    value={formData.newProductName}
+                                                    onChange={e => setFormData({ ...formData, newProductName: e.target.value })}
+                                                    className="input-industrial"
+                                                />
+                                            </div>
+                                            <div className="w-32">
+                                                <input
+                                                    type="number"
+                                                    placeholder="Raf Ömrü"
+                                                    value={formData.shelfLife || ''}
+                                                    onChange={e => setFormData({ ...formData, shelfLife: e.target.value })}
+                                                    className="input-industrial"
+                                                    title="Raf Ömrü (Ay)"
+                                                />
+                                            </div>
                                             <input type="hidden" value={formData.density} />
                                         </div>
                                     ) : (
-                                        <select
-                                            required
-                                            value={formData.productId}
-                                            onChange={e => setFormData({ ...formData, productId: e.target.value })}
-                                            disabled={!!formData.id}
-                                            className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
-                                        >
-                                            <option value="">Ürün Seçiniz...</option>
-                                            {inventory.filter(i => i.type === 'Mamul').map(i => (
-                                                <option key={i.id} value={i.id}>{i.product_code || i.id} - {i.name}</option>
-                                            ))}
-                                        </select>
+                                        <div className="flex gap-2">
+                                            <select
+                                                required
+                                                value={formData.productId}
+                                                onChange={e => {
+                                                    const pid = e.target.value;
+                                                    const prod = inventory.find(i => i.id === parseInt(pid));
+                                                    setFormData({
+                                                        ...formData,
+                                                        productId: pid,
+                                                        shelfLife: prod ? prod.shelf_life_months : ''
+                                                    });
+                                                }}
+                                                disabled={!!formData.id}
+                                                className="select-industrial flex-1"
+                                            >
+                                                <option value="">Ürün Seçiniz...</option>
+                                                {inventory.filter(i => i.type === 'Mamul').map(i => (
+                                                    <option key={i.id} value={i.id}>{i.product_code || i.id} - {i.name}</option>
+                                                ))}
+                                            </select>
+                                            <div className="w-32">
+                                                <input
+                                                    type="number"
+                                                    placeholder="Raf Ömrü"
+                                                    value={formData.shelfLife || ''}
+                                                    onChange={e => setFormData({ ...formData, shelfLife: e.target.value })}
+                                                    className="input-industrial"
+                                                    title="Raf Ömrü (Ay)"
+                                                />
+                                            </div>
+                                        </div>
                                     )}
                                 </div>
+                                <div className="md:col-span-2">
+                                    <label className="label-industrial block">Tehlike İşaretleri (GHS)</label>
+                                    <div className="flex flex-wrap gap-2">
+                                        {[
+                                            { code: 'flammable', label: 'Yanıcı (F)', color: 'red' },
+                                            { code: 'corrosive', label: 'Aşındırıcı (C)', color: 'gray' },
+                                            { code: 'toxic', label: 'Toksik (T)', color: 'orange' },
+                                            { code: 'oxidizing', label: 'Oksitleyici (O)', color: 'yellow' },
+                                            { code: 'irritant', label: 'Tahriş Edici (Xi)', color: 'orange' },
+                                            { code: 'environment', label: 'Çevre (N)', color: 'green' },
+                                            { code: 'health', label: 'Sağlık', color: 'blue' }
+                                        ].map(opt => (
+                                            <button
+                                                key={opt.code}
+                                                type="button"
+                                                onClick={() => {
+                                                    const current = formData.ghsSymbols || [];
+                                                    const newSyms = current.includes(opt.code)
+                                                        ? current.filter(s => s !== opt.code)
+                                                        : [...current, opt.code];
+                                                    setFormData({ ...formData, ghsSymbols: newSyms });
+                                                }}
+                                                className={`px-3 py-1 rounded-[4px] text-[10px] font-bold border transition-colors uppercase ${(formData.ghsSymbols || []).includes(opt.code)
+                                                    ? 'bg-red-50 border-red-500 text-red-700'
+                                                    : 'bg-white border-[#d2d2d7] text-[#86868b] hover:border-[#86868b]'
+                                                    }`}
+                                            >
+                                                {opt.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
                                 <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-1">Müşteri (Opsiyonel)</label>
+                                    <label className="label-industrial block">Müşteri (Opsiyonel)</label>
                                     <select
                                         value={formData.customerId}
                                         onChange={e => setFormData({ ...formData, customerId: e.target.value })}
-                                        className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                        className="select-industrial"
                                     >
                                         <option value="">Genel Reçete</option>
                                         {customers.map(c => (
@@ -381,19 +438,19 @@ export default function RecipesModule({ recipes, inventory, customers, onSave, o
                                 </div>
                             </div>
 
-                            <div className="bg-slate-50 p-4 rounded-lg">
+                            <div className="bg-[#fbfbfd] p-4 rounded-[6px] border border-[#d2d2d7]">
                                 <div className="flex justify-between items-center mb-2">
-                                    <label className="block text-sm font-medium text-slate-700">İçerik (Hammadde)</label>
-                                    <button type="button" onClick={handleAddIngredient} className="text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded hover:bg-indigo-200">+ Ekle</button>
+                                    <label className="label-industrial block">İçerik (Hammadde)</label>
+                                    <button type="button" onClick={handleAddIngredient} className="text-[10px] font-bold bg-[#e8f2ff] text-[#0071e3] px-2 py-1 rounded-[4px] hover:bg-[#d0e6ff] uppercase tracking-wide">+ Ekle</button>
                                 </div>
-                                <div className="space-y-2 max-h-60 overflow-y-auto">
+                                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                                     {formData.ingredients.map((ing, idx) => (
                                         <div key={idx} className="flex gap-2">
                                             <select
                                                 required
                                                 value={ing.itemId}
                                                 onChange={e => handleIngredientChange(idx, 'itemId', e.target.value)}
-                                                className="flex-1 border border-slate-300 rounded p-1 text-sm"
+                                                className="select-industrial flex-1 text-xs py-1.5"
                                             >
                                                 <option value="">Seçiniz...</option>
                                                 {inventory.filter(i => i.type === 'Hammadde').map(i => (
@@ -407,40 +464,40 @@ export default function RecipesModule({ recipes, inventory, customers, onSave, o
                                                 placeholder="%"
                                                 value={ing.percentage}
                                                 onChange={e => handleIngredientChange(idx, 'percentage', e.target.value)}
-                                                className="w-20 border border-slate-300 rounded p-1 text-sm"
+                                                className="input-industrial w-20 text-xs py-1.5"
                                             />
                                             <button type="button" onClick={() => handleRemoveIngredient(idx)} className="text-red-500 hover:bg-red-50 p-1 rounded"><X className="h-4 w-4" /></button>
                                         </div>
                                     ))}
-                                    {formData.ingredients.length === 0 && <div className="text-center text-slate-400 text-sm py-4">Hammadde ekleyin.</div>}
+                                    {formData.ingredients.length === 0 && <div className="text-center text-gray-400 text-xs py-4 italic">Liste boş. Hammadde ekleyin.</div>}
                                 </div>
-                                <div className="mt-2 text-right text-sm font-bold text-slate-600">
+                                <div className="mt-2 text-right text-sm font-bold text-[#1d1d1f]">
                                     Toplam: %{formData.ingredients.reduce((sum, i) => sum + parseFloat(i.percentage || 0), 0).toFixed(2)}
                                 </div>
                             </div>
                         </div>
 
                         <div className="flex justify-end gap-2">
-                            <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg">İptal</button>
-                            <button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg font-medium flex items-center gap-2"><Save className="h-4 w-4" /> Kaydet</button>
+                            <button type="button" onClick={() => setShowForm(false)} className="btn-secondary">İptal</button>
+                            <button type="submit" className="btn-primary flex items-center gap-2"><Save className="h-4 w-4" /> Kaydet</button>
                         </div>
                     </form>
                 </div>
             )}
 
-            {/* Table View */}
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+            {/* Recipe List Table */}
+            <div className="card-industrial overflow-hidden">
                 <div className="overflow-x-auto">
-                    <table className="w-full text-left">
-                        <thead className="bg-slate-50 border-b border-slate-200">
+                    <table className="table-industrial">
+                        <thead>
                             <tr>
-                                <th className="p-4 font-semibold text-slate-600">Ürün</th>
-                                <th className="p-4 font-semibold text-slate-600">Müşteri</th>
-                                <th className="p-4 font-semibold text-slate-600">İçerik</th>
-                                <th className="p-4 font-semibold text-slate-600 text-right">İşlemler</th>
+                                <th className="text-left w-1/3">Ürün</th>
+                                <th className="text-left w-1/4">Müşteri</th>
+                                <th className="text-left w-1/4">İçerik</th>
+                                <th className="text-right">İşlemler</th>
                             </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-100">
+                        <tbody>
                             {filteredRecipes.map(recipe => {
                                 const product = inventory.find(i => i.id === recipe.product_id);
                                 const customer = customers.find(c => c.id === recipe.customer_id);
@@ -448,47 +505,55 @@ export default function RecipesModule({ recipes, inventory, customers, onSave, o
                                     <tr
                                         key={recipe.id}
                                         onClick={() => setSelectedRecipe(recipe)}
-                                        className="hover:bg-slate-50 transition-colors cursor-pointer"
+                                        className="cursor-pointer"
                                     >
-                                        <td className="p-4 font-medium text-slate-800">
-                                            <span className="text-xs text-slate-400 font-mono mr-2">{product?.product_code || product?.id}</span>
-                                            {product?.name || 'Bilinmeyen Ürün'}
+                                        <td>
+                                            <div className="font-medium text-[#1d1d1f]">{product?.name || 'Bilinmeyen Ürün'}</div>
+                                            <div className="text-[10px] text-gray-400 font-mono mt-0.5">{product?.product_code || product?.id}</div>
                                         </td>
-                                        <td className="p-4 text-slate-600">{customer ? customer.name : <span className="text-slate-400 italic">Genel Reçete</span>}</td>
-                                        <td className="p-4 text-slate-600">
-                                            <span className="bg-indigo-50 text-indigo-700 px-2 py-1 rounded text-xs font-medium">
+                                        <td>
+                                            {customer ? (
+                                                <div className="font-medium text-gray-700">{customer.name}</div>
+                                            ) : (
+                                                <span className="text-gray-400 italic text-xs">Genel Reçete</span>
+                                            )}
+                                        </td>
+                                        <td>
+                                            <span className="badge-industrial badge-industrial-blue">
                                                 {recipe.ingredients.length} Hammadde
                                             </span>
                                         </td>
-                                        <td className="p-4 text-right space-x-2" onClick={(e) => e.stopPropagation()}>
-                                            <button
-                                                onClick={() => handleEdit(recipe)}
-                                                className="text-blue-600 hover:bg-blue-50 p-2 rounded-lg transition-colors"
-                                                title="Düzenle"
-                                            >
-                                                <Edit className="h-4 w-4" />
-                                            </button>
-                                            <button
-                                                onClick={() => handlePrintRecipe(recipe)}
-                                                className="text-slate-600 hover:bg-slate-100 p-2 rounded-lg transition-colors"
-                                                title="Yazdır"
-                                            >
-                                                <Printer className="h-4 w-4" />
-                                            </button>
-                                            <button
-                                                onClick={() => onDelete(recipe.id)}
-                                                className="text-red-600 hover:bg-red-50 p-2 rounded-lg transition-colors"
-                                                title="Sil"
-                                            >
-                                                <Trash2 className="h-4 w-4" />
-                                            </button>
+                                        <td className="text-right" onClick={(e) => e.stopPropagation()}>
+                                            <div className="flex justify-end gap-1">
+                                                <button
+                                                    onClick={() => handleEdit(recipe)}
+                                                    className="p-1.5 text-[#0071e3] hover:text-[#0077ed] transition-colors"
+                                                    title="Düzenle"
+                                                >
+                                                    <Edit className="h-4 w-4" />
+                                                </button>
+                                                <button
+                                                    onClick={() => handlePrintRecipe(recipe)}
+                                                    className="p-1.5 text-gray-500 hover:text-gray-700 transition-colors"
+                                                    title="Yazdır"
+                                                >
+                                                    <Printer className="h-4 w-4" />
+                                                </button>
+                                                <button
+                                                    onClick={() => onDelete(recipe.id)}
+                                                    className="p-1.5 text-gray-400 hover:text-[#d21e1e] transition-colors"
+                                                    title="Sil"
+                                                >
+                                                    <Trash2 className="h-4 w-4" />
+                                                </button>
+                                            </div>
                                         </td>
                                     </tr>
                                 );
                             })}
                             {filteredRecipes.length === 0 && (
                                 <tr>
-                                    <td colSpan="4" className="p-8 text-center text-slate-400">
+                                    <td colSpan="4" className="px-6 py-8 text-center text-slate-400 italic text-xs">
                                         {filters.search || filters.customerId !== 'all' ? 'Arama kriterlerine uygun reçete bulunamadı.' : 'Henüz reçete tanımlanmamış.'}
                                     </td>
                                 </tr>

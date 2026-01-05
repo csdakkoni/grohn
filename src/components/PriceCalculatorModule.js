@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Calculator, AlertCircle, FileText, Plus, Trash2, ShoppingCart } from 'lucide-react';
+import { Calculator, AlertCircle, FileText, Plus, Trash2, ShoppingCart, Save } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { turkishToEnglish, preparePDFWithFont } from '../utils/exportUtils';
+import { drawCIHeader, drawCIFooter, drawCIMetadataGrid, drawCIWrappedText, CI_PALETTE } from '../utils/pdfCIUtils';
+import { supabase } from '../supabaseClient';
 
-export default function PriceCalculatorModule({ recipes, inventory, exchangeRates }) {
+export default function PriceCalculatorModule({ recipes, inventory, exchangeRates, globalSettings = {}, onRefresh, isIntegrated = false }) {
     const [form, setForm] = useState({
         recipeId: '',
         quantity: 1000,
@@ -58,83 +60,130 @@ export default function PriceCalculatorModule({ recipes, inventory, exchangeRate
         const recipe = recipes.find(r => r.id === parseInt(form.recipeId));
         if (!recipe) return;
 
-        // 1. Raw Material Cost (in USD)
-        let rawMaterialCostUSD = 0;
+        const quantity = parseVal(form.quantity) || 1000;
+        const intRate = parseVal(form.monthlyInterestRate) / 100 / 30;
+        const termDays = parseVal(form.saleTermDays);
+
+        // 1. Raw Materials & Avg Term
+        let totalRawMaterialUSD = 0;
+        let payTermSum = 0;
+
         recipe.ingredients.forEach(ing => {
-            const item = inventory.find(i => i.id === parseInt(ing.itemId));
+            const currentId = ing.itemId || ing.item_id;
+            const item = inventory.find(i => i.id === parseInt(currentId));
             if (item) {
                 const itemCostUSD = toUSD(item.cost || 0, item.currency);
-                rawMaterialCostUSD += itemCostUSD * (parseFloat(ing.percentage) / 100);
+                const weight = (parseFloat(ing.percentage) / 100) * quantity;
+                const lineCostUSD = itemCostUSD * weight;
+                totalRawMaterialUSD += lineCostUSD;
+                payTermSum += lineCostUSD * (item.payment_term || 0);
             }
         });
 
-        // 2. Packaging Cost
-        let packagingCostUSD = 0;
-        if (form.packagingId) {
-            const pkg = inventory.find(i => i.id === parseInt(form.packagingId));
-            if (pkg) {
-                packagingCostUSD = toUSD(pkg.cost || 0, pkg.currency);
-            }
-        }
+        const avgRawTerm = totalRawMaterialUSD > 0 ? payTermSum / totalRawMaterialUSD : 0;
 
-        // 3. Operational Costs
-        const shippingUSD = toUSD(parseVal(form.shippingCost), form.shippingCurrency);
-        const overheadPerKgUSD = toUSD(parseVal(form.overheadPerKg), form.overheadCurrency);
-
-        const quantity = parseVal(form.quantity);
-        const totalRawMaterialUSD = rawMaterialCostUSD * quantity;
-
-        // Start Packaging Logic Fix
+        // 2. Packaging (PROPORTIONAL for unit cost stability)
         let totalPackagingUSD = 0;
         if (form.packagingId) {
             const pkg = inventory.find(i => i.id === parseInt(form.packagingId));
             if (pkg) {
                 const pkgUnitCostUSD = toUSD(pkg.cost || 0, pkg.currency);
-                const capacity = parseFloat(pkg.capacity_value) || 1; // Default to 1 if not set to avoid infinity
-                const packageCount = quantity / capacity;
-                totalPackagingUSD = pkgUnitCostUSD * packageCount;
+                const capacity = parseFloat(pkg.capacity_value) || 1000;
+                // [PROPORTIONAL] Weight-based cost
+                totalPackagingUSD = (pkgUnitCostUSD / capacity) * quantity;
             }
         }
-        // End Packaging Logic Fix
 
-        const totalOverheadUSD = overheadPerKgUSD * quantity;
-        const totalShippingUSD = shippingUSD;
+        // 3. Operational Costs (Shipping = Total, Overhead = $/kg)
+        const totalShippingUSD = toUSD(parseVal(form.shippingCost), form.shippingCurrency);
+        const totalOverheadUSD = toUSD(parseVal(form.overheadPerKg), form.overheadCurrency) * quantity;
 
-        const totalProductionCostUSD = totalRawMaterialUSD + totalPackagingUSD + totalOverheadUSD + totalShippingUSD;
-        const unitCostUSD = totalProductionCostUSD / quantity;
+        // 4. Split Financing
+        // Raw materials benefit from supplier term
+        const rmFinancingUSD = totalRawMaterialUSD * Math.max(0, termDays - avgRawTerm) * intRate;
+        // Upfront costs (Pkg + Ship + Overhead) are financed for the full sale term
+        const upfrontCostsUSD = totalPackagingUSD + totalShippingUSD + totalOverheadUSD;
+        const upfrontFinancingUSD = upfrontCostsUSD * termDays * intRate;
 
-        // 4. Financing Cost
-        const monthlyRate = parseVal(form.monthlyInterestRate) / 100;
-        const termDays = parseVal(form.saleTermDays);
-        const financingCostUSD = totalProductionCostUSD * (monthlyRate / 30) * termDays;
+        const totalFinancingUSD = rmFinancingUSD + upfrontFinancingUSD;
 
-        // 5. Profit
+        // 5. Final Totals
+        const baseProductionCostUSD = totalRawMaterialUSD + totalPackagingUSD + totalShippingUSD + totalOverheadUSD;
+        const totalCostUSD = baseProductionCostUSD + totalFinancingUSD;
         const profitMargin = parseVal(form.profitMarginPercent) / 100;
-        const totalCostWithFinanceUSD = totalProductionCostUSD + financingCostUSD;
-        const profitAmountUSD = totalCostWithFinanceUSD * profitMargin;
 
-        const totalPriceUSD = totalCostWithFinanceUSD + profitAmountUSD;
+        // [MARGIN FIX] Price = Cost / (1 - Margin)
+        const totalPriceUSD = profitMargin >= 1 ? totalCostUSD * 2 : totalCostUSD / (1 - profitMargin);
         const unitPriceUSD = totalPriceUSD / quantity;
 
         // Convert Results to Target Currency
         const target = form.currency;
         setResults({
             currency: target,
-            unitCost: fromUSD(unitCostUSD, target),
-            unitPrice: fromUSD(unitPriceUSD, target),
+            unitCost: fromUSD(totalCostUSD / quantity, target),
+            unitPrice: fromUSD(totalPriceUSD / quantity, target),
             totalPrice: fromUSD(totalPriceUSD, target),
             breakdown: {
                 rawMaterial: fromUSD(totalRawMaterialUSD, target),
                 packaging: fromUSD(totalPackagingUSD, target),
                 overhead: fromUSD(totalOverheadUSD, target),
                 shipping: fromUSD(totalShippingUSD, target),
-                financing: fromUSD(financingCostUSD, target),
-                profit: fromUSD(profitAmountUSD, target)
+                financing: fromUSD(totalFinancingUSD, target),
+                profit: fromUSD(totalPriceUSD - totalCostUSD, target)
             },
-            // Store raw form data for basket
             formData: { ...form },
             productName: recipe.product_id ? inventory.find(i => i.id === recipe.product_id)?.name : 'Unknown'
         });
+    };
+
+    const [history, setHistory] = useState([]);
+
+    const loadHistory = async () => {
+        const { data, error } = await supabase
+            .from('calculation_history')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(20);
+        if (!error && data) setHistory(data);
+    };
+
+    useEffect(() => {
+        loadHistory();
+    }, []);
+
+    const handleSaveToHistory = async () => {
+        if (!results || !form.recipeId) return;
+
+        const recipe = recipes.find(r => r.id === parseInt(form.recipeId));
+        if (!recipe) return;
+
+        try {
+            const { error } = await supabase.from('calculation_history').insert({
+                recipe_id: parseInt(form.recipeId),
+                product_name: results.productName,
+                quantity: parseVal(form.quantity),
+                unit_cost: results.unitCost,
+                unit_price: results.unitPrice,
+                currency: results.currency,
+                breakdown: results.breakdown,
+                parameters: {
+                    packaging_id: form.packagingId,
+                    shipping_cost: form.shippingCost,
+                    overhead_per_kg: form.overheadPerKg,
+                    sale_term_days: form.saleTermDays,
+                    monthly_interest_rate: form.monthlyInterestRate,
+                    profit_margin_percent: form.profitMarginPercent
+                }
+            });
+
+            if (error) throw error;
+
+            alert('Hesaplama geçmişe başarıyla kaydedildi.');
+            loadHistory();
+        } catch (error) {
+            console.error('Kaydetme hatası:', error);
+            alert('Geçmişe kaydedilemedi: ' + error.message);
+        }
     };
 
     const addToBasket = () => {
@@ -153,99 +202,112 @@ export default function PriceCalculatorModule({ recipes, inventory, exchangeRate
         const doc = await preparePDFWithFont();
         const fontName = doc.activeFont || 'helvetica';
 
-        // --- HEADER ---
-        doc.setFillColor(44, 62, 80); // Dark Blue
-        doc.rect(0, 0, 210, 40, 'F');
+        // Initial Header (Professional Layout)
+        const docDate = new Date().toLocaleDateString('tr-TR');
+        drawCIHeader(doc, 'TEKLİF FORMU', 'SATIŞ VE PAZARLAMA MERKEZİ', docDate, `OFF-${Date.now().toString().slice(-6)}`);
+        const startY = 45;
 
-        doc.setTextColor(255, 255, 255);
-        doc.setFontSize(24);
-        doc.setFont(fontName, 'bold');
-        doc.text('FİYAT TEKLİFİ', 105, 20, null, null, 'center');
-
-        doc.setFontSize(10);
-        doc.text('GROHN Kimya A.Ş.', 105, 30, null, null, 'center');
-
-        // --- CUSTOMER INFO ---
-        doc.setTextColor(0, 0, 0);
-        doc.setFontSize(11);
-        doc.setFont(fontName, 'normal');
-
-        const startY = 50;
-
-        // Left Col
-        doc.setFont(fontName, 'bold');
-        doc.text('Sayın:', 14, startY);
-        doc.setFont(fontName, 'normal');
-        doc.text(quoteForm.customerName || 'Sayın Yetkili', 30, startY);
-
-        if (quoteForm.contactPerson) {
-            doc.setFont(fontName, 'bold');
-            doc.text('İlgili Kişi:', 14, startY + 6);
-            doc.setFont(fontName, 'normal');
-            doc.text(quoteForm.contactPerson, 35, startY + 6);
-        }
-
-        // Right Col
-        doc.setFont(fontName, 'bold');
-        doc.text('Tarih:', 140, startY);
-        doc.setFont(fontName, 'normal');
-        doc.text(new Date().toLocaleDateString('tr-TR'), 160, startY);
-
-        doc.setFont(fontName, 'bold');
-        doc.text('Geçerlilik:', 140, startY + 6);
-        doc.setFont(fontName, 'normal');
-        doc.text(new Date(quoteForm.validityDate).toLocaleDateString('tr-TR'), 160, startY + 6);
+        // Metadata Grid (Cleaned)
+        const metaData = [
+            { label: 'MÜŞTERİ', value: quoteForm.customerName || 'Sayın Yetkili' },
+            { label: 'İLGİLİ KİŞİ', value: quoteForm.contactPerson || '-' },
+            { label: 'GEÇERLİLİK TARİHİ', value: new Date(quoteForm.validityDate).toLocaleDateString('tr-TR') }
+        ];
+        let currY = drawCIMetadataGrid(doc, 14, startY, metaData, 2);
+        currY += 5;
 
         // --- QUOTE TABLE ---
         const tableBody = quoteBasket.map(item => {
             const packaging = inventory.find(i => i.id === parseInt(item.formData.packagingId));
-
-            // If Manual (no quantity), we show "-" for quantity or handle differently
-            const qtyDisplay = item.isManual ? '-' : `${item.formData.quantity} kg`;
             const descDisplay = item.description ? item.description : (item.productName || '-');
 
             return [
-                descDisplay, // Ürün / Açıklama
-                packaging?.name || 'Dökme', // Ambalaj
-                `${item.formData.saleTermDays} Gün`, // Vade
-                `${item.unitPrice.toFixed(2)} ${item.currency}`, // Birim Fiyat
+                descDisplay,
+                packaging?.name || 'Dökme',
+                `${item.formData.saleTermDays} Gün`,
+                `${item.unitPrice.toFixed(2)} ${item.currency}`,
             ];
         });
 
         autoTable(doc, {
-            startY: startY + 20,
-            head: [['Ürün / Açıklama', 'Ambalaj', 'Vade', 'Birim Fiyat']],
+            startY: currY,
+            head: [['Ürün / Açıklama', 'Ambalaj', 'Vade', 'Birim Fiyat (kg)']],
             body: tableBody,
             theme: 'grid',
-            headStyles: { fillColor: [44, 62, 80], textColor: 255, font: fontName, fontStyle: 'bold' },
-            bodyStyles: { font: fontName },
-            styles: { fontSize: 10, cellPadding: 3 }
+            headStyles: {
+                fillColor: CI_PALETTE.pure_black,
+                textColor: 255,
+                font: fontName,
+                fontStyle: 'bold',
+                fontSize: 7,
+                cellPadding: 3
+            },
+            bodyStyles: {
+                font: fontName,
+                fontSize: 8,
+                cellPadding: 3,
+                textColor: CI_PALETTE.pure_black
+            },
+            columnStyles: {
+                0: { cellWidth: 'auto', fontStyle: 'bold' },
+                1: { cellWidth: 35 },
+                2: { cellWidth: 30, halign: 'center' },
+                3: { cellWidth: 35, halign: 'right', fontStyle: 'bold' }
+            },
+            margin: { top: 40, bottom: 35 },
+            didDrawPage: (data) => {
+                const docDate = new Date().toLocaleDateString('tr-TR');
+                drawCIHeader(doc, 'TEKLİF FORMU', 'SATIŞ VE PAZARLAMA MERKEZİ', docDate);
+                drawCIFooter(doc, globalSettings, 'Ticari Modül v5.3.0');
+            }
         });
 
-        // --- CONDITIONS / FOOTER ---
+        // --- CONDITIONS / SIGNATURES ---
         let finalY = doc.lastAutoTable.finalY + 15;
 
-        doc.setFont(fontName, 'bold');
-        doc.setFontSize(10);
-        doc.text('TEKLİF ŞARTLARI', 14, finalY);
+        // Space Check
+        if (finalY > 230) {
+            doc.addPage();
+            const docDate = new Date().toLocaleDateString('tr-TR');
+            drawCIHeader(doc, 'TEKLİF FORMU', 'SATIŞ VE PAZARLAMA MERKEZİ', docDate);
+            drawCIFooter(doc, globalSettings, 'Ticari Modül v5.3.0');
+            finalY = 45;
+        }
 
-        doc.setFont(fontName, 'normal');
-        doc.setFontSize(9);
-        const splitText = doc.splitTextToSize(quoteForm.offerConditions, 180);
-        doc.text(splitText, 14, finalY + 5);
+        if (finalY < 240) {
+            doc.setDrawColor(...CI_PALETTE.hairline_grey);
+            doc.setLineWidth(0.05);
+            doc.line(14, finalY, 196, finalY);
 
-        doc.save(`Teklif_${quoteForm.customerName || 'Musteri'}_${new Date().toISOString().split('T')[0]}.pdf`);
+            currY = drawCIWrappedText(doc, 14, finalY + 6, 'TEKLİF ŞARTLARI VE NOTLAR', quoteForm.offerConditions || 'Standart satış koşulları geçerlidir.', 182);
+
+            // Authorized Signature
+            const sigY = currY + 15;
+            if (sigY < 270) {
+                doc.setDrawColor(...CI_PALETTE.hairline_grey);
+                doc.line(136, sigY + 15, 196, sigY + 15);
+                doc.setFont(fontName, 'bold');
+                doc.setTextColor(...CI_PALETTE.neutral_grey);
+                doc.text('YETKİLİ İMZA', 136, sigY);
+            }
+        }
+
+        doc.save(`Fiyat_Teklifi_${quoteForm.customerName || 'Musteri'}.pdf`);
         setQuoteForm({ ...quoteForm, showModal: false });
     };
 
-    const [activeTab, setActiveTab] = useState('calculator'); // 'calculator' | 'manual'
+    const [activeTab, setActiveTab] = useState('calculator'); // 'calculator' | 'manual' | 'history'
     const [manualForm, setManualForm] = useState({
         productId: '',
         description: '', // New field instead of Qty
         unitPrice: 0,
         currency: 'USD',
         packagingId: '',
-        saleTermDays: 30
+        saleTermDays: 30,
+        shippingCost: 0,
+        shippingCurrency: 'USD',
+        overheadPerKg: 0.2,
+        overheadCurrency: 'USD'
     });
 
     // ... (existing parseVal, toUSD, fromUSD, calculatePrice functions remain unchanged)
@@ -268,37 +330,58 @@ export default function PriceCalculatorModule({ recipes, inventory, exchangeRate
             formData: {
                 quantity: 0, // No quantity
                 saleTermDays: manualForm.saleTermDays,
-                packagingId: manualForm.packagingId
+                packagingId: manualForm.packagingId,
+                shippingCost: manualForm.shippingCost,
+                shippingCurrency: manualForm.shippingCurrency,
+                overheadPerKg: manualForm.overheadPerKg,
+                overheadCurrency: manualForm.overheadCurrency
             },
             isManual: true
         };
 
         setQuoteBasket([...quoteBasket, newItem]);
-        setManualForm({ ...manualForm, productId: '', description: '', unitPrice: 0 });
+        setManualForm({
+            ...manualForm,
+            productId: '',
+            description: '',
+            unitPrice: 0,
+            shippingCost: 0,
+            overheadPerKg: 0.2
+        });
     };
 
     return (
         <div className="space-y-6">
-            <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-                <Calculator className="h-6 w-6 text-indigo-600" /> Fiyat ve Teklif
-            </h2>
+            {!isIntegrated && (
+                <h2 className="heading-industrial text-2xl flex items-center gap-2">
+                    <Calculator className="h-6 w-6 text-[#0071e3]" /> Fiyat ve Teklif
+                </h2>
+            )}
 
             <div className="flex gap-4 border-b border-slate-200 mb-4">
                 <button
                     onClick={() => setActiveTab('calculator')}
-                    className={`pb-2 px-4 font-medium transition-colors ${activeTab === 'calculator'
-                        ? 'text-indigo-600 border-b-2 border-indigo-600'
-                        : 'text-slate-500 hover:text-slate-700'}`}
+                    className={`pb-2 px-4 font-bold text-xs uppercase tracking-wider transition-all ${activeTab === 'calculator'
+                        ? 'text-[#0071e3] border-b-2 border-[#0071e3]'
+                        : 'text-[#86868b] hover:text-[#1d1d1f]'}`}
                 >
                     Maliyet Hesapla
                 </button>
                 <button
                     onClick={() => setActiveTab('manual')}
-                    className={`pb-2 px-4 font-medium transition-colors ${activeTab === 'manual'
-                        ? 'text-indigo-600 border-b-2 border-indigo-600'
-                        : 'text-slate-500 hover:text-slate-700'}`}
+                    className={`pb-2 px-4 font-bold text-xs uppercase tracking-wider transition-all ${activeTab === 'manual'
+                        ? 'text-[#0071e3] border-b-2 border-[#0071e3]'
+                        : 'text-[#86868b] hover:text-[#1d1d1f]'}`}
                 >
                     Manuel Ekle
+                </button>
+                <button
+                    onClick={() => setActiveTab('history')}
+                    className={`pb-2 px-4 font-bold text-xs uppercase tracking-wider transition-all ${activeTab === 'history'
+                        ? 'text-[#0071e3] border-b-2 border-[#0071e3]'
+                        : 'text-[#86868b] hover:text-[#1d1d1f]'}`}
+                >
+                    Geçmiş
                 </button>
             </div>
 
@@ -309,16 +392,16 @@ export default function PriceCalculatorModule({ recipes, inventory, exchangeRate
                     {/* CALCULATOR TAB */}
                     {activeTab === 'calculator' && (
                         <>
-                            <div className="bg-white p-6 rounded-xl shadow-lg border border-slate-200">
-                                <h3 className="text-lg font-bold mb-4 text-slate-700">Maliyet Parametreleri</h3>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="card-industrial p-6">
+                                <h3 className="heading-industrial text-sm mb-6">Maliyet Parametreleri</h3>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                     {/* Existing Calculator Inputs */}
-                                    <div>
-                                        <label className="block text-sm font-medium text-slate-700 mb-1">Reçete / Ürün</label>
+                                    <div className="space-y-1">
+                                        <label className="label-industrial">Reçete / Ürün</label>
                                         <select
                                             value={form.recipeId}
                                             onChange={e => setForm({ ...form, recipeId: e.target.value })}
-                                            className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                            className="select-industrial"
                                         >
                                             <option value="">Seçiniz...</option>
                                             {recipes.map(r => {
@@ -327,21 +410,21 @@ export default function PriceCalculatorModule({ recipes, inventory, exchangeRate
                                             })}
                                         </select>
                                     </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-slate-700 mb-1">Miktar (kg)</label>
+                                    <div className="space-y-1">
+                                        <label className="label-industrial">Miktar (kg)</label>
                                         <input
                                             type="number"
                                             value={form.quantity}
                                             onChange={e => setForm({ ...form, quantity: e.target.value })}
-                                            className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                            className="input-industrial"
                                         />
                                     </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-slate-700 mb-1">Ambalaj</label>
+                                    <div className="space-y-1">
+                                        <label className="label-industrial">Ambalaj</label>
                                         <select
                                             value={form.packagingId}
                                             onChange={e => setForm({ ...form, packagingId: e.target.value })}
-                                            className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                            className="select-industrial"
                                         >
                                             <option value="">Dökme (Ambalajsız)</option>
                                             {inventory.filter(i => i.type === 'Ambalaj').map(i => (
@@ -349,19 +432,20 @@ export default function PriceCalculatorModule({ recipes, inventory, exchangeRate
                                             ))}
                                         </select>
                                     </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-slate-700 mb-1">Toplam Nakliye</label>
+                                    <div className="space-y-1">
+                                        <label className="label-industrial">Toplam Nakliye</label>
                                         <div className="flex gap-2">
                                             <input
                                                 type="number"
+                                                step="0.001"
                                                 value={form.shippingCost}
                                                 onChange={e => setForm({ ...form, shippingCost: e.target.value })}
-                                                className="flex-1 border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                                className="input-industrial flex-1"
                                             />
                                             <select
                                                 value={form.shippingCurrency}
                                                 onChange={e => setForm({ ...form, shippingCurrency: e.target.value })}
-                                                className="w-24 border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none bg-slate-50"
+                                                className="select-industrial w-24 bg-[#f5f5f7]"
                                             >
                                                 <option value="TRY">TRY</option>
                                                 <option value="USD">USD</option>
@@ -369,20 +453,20 @@ export default function PriceCalculatorModule({ recipes, inventory, exchangeRate
                                             </select>
                                         </div>
                                     </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-slate-700 mb-1">Genel Gider (Birim/kg)</label>
+                                    <div className="space-y-1">
+                                        <label className="label-industrial">Genel Gider (kg başı)</label>
                                         <div className="flex gap-2">
                                             <input
                                                 type="number"
                                                 step="0.01"
                                                 value={form.overheadPerKg}
                                                 onChange={e => setForm({ ...form, overheadPerKg: e.target.value })}
-                                                className="flex-1 border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                                className="input-industrial flex-1"
                                             />
                                             <select
                                                 value={form.overheadCurrency}
                                                 onChange={e => setForm({ ...form, overheadCurrency: e.target.value })}
-                                                className="w-24 border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none bg-slate-50"
+                                                className="select-industrial w-24 bg-[#f5f5f7]"
                                             >
                                                 <option value="USD">USD</option>
                                                 <option value="EUR">EUR</option>
@@ -390,40 +474,40 @@ export default function PriceCalculatorModule({ recipes, inventory, exchangeRate
                                             </select>
                                         </div>
                                     </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-slate-700 mb-1">Satış Vadesi (Gün)</label>
+                                    <div className="space-y-1">
+                                        <label className="label-industrial">Satış Vadesi (Gün)</label>
                                         <input
                                             type="number"
                                             value={form.saleTermDays}
                                             onChange={e => setForm({ ...form, saleTermDays: e.target.value })}
-                                            className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                            className="input-industrial"
                                         />
                                     </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-slate-700 mb-1">Aylık Faiz (%)</label>
+                                    <div className="space-y-1">
+                                        <label className="label-industrial">Aylık Faiz (%)</label>
                                         <input
                                             type="number"
                                             step="0.1"
                                             value={form.monthlyInterestRate}
                                             onChange={e => setForm({ ...form, monthlyInterestRate: e.target.value })}
-                                            className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                            className="input-industrial"
                                         />
                                     </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-slate-700 mb-1">Kar Marjı (%)</label>
+                                    <div className="space-y-1">
+                                        <label className="label-industrial">Kar Marjı (%)</label>
                                         <input
                                             type="number"
                                             value={form.profitMarginPercent}
                                             onChange={e => setForm({ ...form, profitMarginPercent: e.target.value })}
-                                            className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                            className="input-industrial"
                                         />
                                     </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-slate-700 mb-1">Para Birimi</label>
+                                    <div className="space-y-1">
+                                        <label className="label-industrial">Para Birimi</label>
                                         <select
                                             value={form.currency}
                                             onChange={e => setForm({ ...form, currency: e.target.value })}
-                                            className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                            className="select-industrial"
                                         >
                                             <option value="USD">USD</option>
                                             <option value="EUR">EUR</option>
@@ -431,47 +515,66 @@ export default function PriceCalculatorModule({ recipes, inventory, exchangeRate
                                         </select>
                                     </div>
                                 </div>
-                                <div className="mt-6 flex gap-2">
+
+                                <div className="mt-8 flex gap-3">
                                     <button
                                         onClick={calculatePrice}
-                                        className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-colors"
+                                        className="btn-primary w-full py-4 text-base shadow-md"
                                     >
-                                        <Calculator className="h-5 w-5" /> Hesapla
+                                        <Calculator className="h-5 w-5 mr-2" /> HESAPLA
                                     </button>
-                                    {results && (
-                                        <button
-                                            onClick={addToBasket}
-                                            className="flex-1 bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-colors"
-                                        >
-                                            <Plus className="h-5 w-5" /> Sepete Ekle
-                                        </button>
-                                    )}
                                 </div>
                             </div>
 
                             {/* RESULTS PREVIEW */}
                             {results && (
-                                <div className="bg-white p-6 rounded-xl shadow-lg border border-slate-200 animate-fade-in">
-                                    <h3 className="text-lg font-bold mb-4 text-slate-700">Hesaplama Sonucu ({results.productName})</h3>
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                        <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
-                                            <div className="text-sm text-slate-500 mb-1">Birim Maliyet</div>
-                                            <div className="text-2xl font-bold text-slate-700">
-                                                {results.unitCost.toFixed(2)} {results.currency}
+                                <div className="card-industrial p-6 border-2 border-[#d0e6ff] animate-fade-in space-y-6">
+                                    <div className="flex justify-between items-center border-b border-[#d2d2d7] pb-3">
+                                        <h3 className="text-lg font-bold text-[#1d1d1f]">Maliyet Özeti ({results.productName})</h3>
+                                        <span className="badge-industrial badge-industrial-blue">Vade: {form.saleTermDays} Gün</span>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <div className="bg-[#f5f5f7] p-4 rounded-[6px] border border-[#d2d2d7]">
+                                            <div className="text-[10px] font-bold text-[#86868b] uppercase mb-1 tracking-wider">Birim Maliyet</div>
+                                            <div className="text-xl font-bold text-[#1d1d1f] font-mono">
+                                                {results.unitCost.toFixed(2)} {results.currency} / kg
                                             </div>
                                         </div>
-                                        <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
-                                            <div className="text-sm text-slate-500 mb-1">Birim Fiyat (Teklif)</div>
-                                            <div className="text-2xl font-bold text-indigo-600">
-                                                {results.unitPrice.toFixed(2)} {results.currency}
+                                        <div className="bg-[#e8f2ff] p-4 rounded-[6px] border border-[#d0e6ff]">
+                                            <div className="text-[10px] font-bold text-[#0071e3] uppercase mb-1 tracking-wider">Hedef Satış Fiyatı (kg)</div>
+                                            <div className="text-xl font-bold text-[#0071e3] font-mono">
+                                                {results.unitPrice.toFixed(2)} {results.currency} / kg
                                             </div>
                                         </div>
-                                        <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
-                                            <div className="text-sm text-slate-500 mb-1">Toplam Tutar</div>
-                                            <div className="text-2xl font-bold text-green-600">
+                                        <div className="bg-[#eafaef] p-4 rounded-[6px] border border-[#cff7d9]">
+                                            <div className="text-[10px] font-bold text-[#107c10] uppercase mb-1 tracking-wider">Toplam Teklif</div>
+                                            <div className="text-xl font-bold text-[#107c10] font-mono">
                                                 {results.totalPrice.toFixed(2)} {results.currency}
                                             </div>
                                         </div>
+                                    </div>
+
+                                    <div className="flex flex-col md:flex-row gap-3 pt-2">
+                                        <button
+                                            onClick={handleSaveToHistory}
+                                            className="btn-secondary flex-1 py-3 justify-center"
+                                        >
+                                            <Save size={18} className="mr-2" /> Geçmişe Kaydet
+                                        </button>
+                                        <button
+                                            onClick={addToBasket}
+                                            className="btn-primary flex-1 py-3 justify-center shadow-md shadow-blue-200"
+                                        >
+                                            <Plus size={18} className="mr-2" /> Sepete Ekle
+                                        </button>
+                                    </div>
+
+                                    <div className="bg-[#fffbe6] p-3 rounded-[6px] border border-[#fff1b8] flex gap-2">
+                                        <span className="text-lg">ℹ️</span>
+                                        <span className="text-[11px] text-[#b37feb] font-medium leading-tight pt-1">
+                                            "Geçmişe Kaydet" butonuna bastığınızda, bu hesaplama sistem veritabanına kaydedilir ve 'Geçmiş' sekmesinden görüntülenebilir.
+                                        </span>
                                     </div>
                                 </div>
                             )}
@@ -480,15 +583,15 @@ export default function PriceCalculatorModule({ recipes, inventory, exchangeRate
 
                     {/* MANUAL TAB */}
                     {activeTab === 'manual' && (
-                        <div className="bg-white p-6 rounded-xl shadow-lg border border-slate-200 animate-fade-in">
-                            <h3 className="text-lg font-bold mb-4 text-slate-700">Hızlı Teklif Girişi</h3>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-1">Ürün Seçimi (Opsiyonel)</label>
+                        <div className="card-industrial p-6 animate-fade-in">
+                            <h3 className="heading-industrial text-sm mb-6">Hızlı Teklif Girişi</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div className="space-y-1">
+                                    <label className="label-industrial">Ürün Seçimi (Opsiyonel)</label>
                                     <select
                                         value={manualForm.productId}
                                         onChange={e => setManualForm({ ...manualForm, productId: e.target.value })}
-                                        className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                        className="select-industrial"
                                     >
                                         <option value="">Seçiniz...</option>
                                         {/* Show all inventory */}
@@ -497,44 +600,44 @@ export default function PriceCalculatorModule({ recipes, inventory, exchangeRate
                                         ))}
                                     </select>
                                 </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-1">Ürün Açıklaması (Opsiyonel)</label>
+                                <div className="space-y-1">
+                                    <label className="label-industrial">Ürün Açıklaması (Opsiyonel)</label>
                                     <input
                                         type="text"
                                         value={manualForm.description}
                                         onChange={e => setManualForm({ ...manualForm, description: e.target.value })}
-                                        className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                        className="input-industrial"
                                         placeholder="Örn: %99 Saflık"
                                     />
                                 </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-1">Birim Fiyat</label>
+                                <div className="space-y-1">
+                                    <label className="label-industrial">Hedef Satış Fiyatı (kg)</label>
                                     <input
                                         type="number"
                                         value={manualForm.unitPrice}
                                         onChange={e => setManualForm({ ...manualForm, unitPrice: e.target.value })}
-                                        className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                        className="input-industrial"
                                         placeholder="0.00"
                                     />
                                 </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-1">Para Birimi</label>
+                                <div className="space-y-1">
+                                    <label className="label-industrial">Para Birimi</label>
                                     <select
                                         value={manualForm.currency}
                                         onChange={e => setManualForm({ ...manualForm, currency: e.target.value })}
-                                        className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                        className="select-industrial"
                                     >
                                         <option value="USD">USD</option>
                                         <option value="EUR">EUR</option>
                                         <option value="TRY">TRY</option>
                                     </select>
                                 </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-1">Ambalaj (Opsiyonel)</label>
+                                <div className="space-y-1">
+                                    <label className="label-industrial">Ambalaj (Opsiyonel)</label>
                                     <select
                                         value={manualForm.packagingId}
                                         onChange={e => setManualForm({ ...manualForm, packagingId: e.target.value })}
-                                        className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                        className="select-industrial"
                                     >
                                         <option value="">Dökme / Belirtilmemiş</option>
                                         {inventory.filter(i => i.type === 'Ambalaj').map(i => (
@@ -542,23 +645,97 @@ export default function PriceCalculatorModule({ recipes, inventory, exchangeRate
                                         ))}
                                     </select>
                                 </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-1">Vade (Gün)</label>
+                                <div className="space-y-1">
+                                    <label className="label-industrial">Vade (Gün)</label>
                                     <input
                                         type="number"
                                         value={manualForm.saleTermDays}
                                         onChange={e => setManualForm({ ...manualForm, saleTermDays: e.target.value })}
-                                        className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                        className="input-industrial"
                                     />
                                 </div>
+                                <div className="space-y-1">
+                                    <label className="label-industrial">Nakliye Maliyeti</label>
+                                    <div className="flex gap-2">
+                                        <input
+                                            type="number"
+                                            value={manualForm.shippingCost}
+                                            onChange={e => setManualForm({ ...manualForm, shippingCost: e.target.value })}
+                                            className="input-industrial flex-1"
+                                        />
+                                        <select
+                                            value={manualForm.shippingCurrency}
+                                            onChange={e => setManualForm({ ...manualForm, shippingCurrency: e.target.value })}
+                                            className="select-industrial w-24 bg-[#f5f5f7]"
+                                        >
+                                            <option value="USD">USD</option>
+                                            <option value="EUR">EUR</option>
+                                            <option value="TRY">TRY</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="label-industrial">Genel Gider (kg)</label>
+                                    <div className="flex gap-2">
+                                        <input
+                                            type="number"
+                                            step="0.001"
+                                            value={manualForm.overheadPerKg}
+                                            onChange={e => setManualForm({ ...manualForm, overheadPerKg: e.target.value })}
+                                            className="input-industrial flex-1"
+                                        />
+                                        <select
+                                            value={manualForm.overheadCurrency}
+                                            onChange={e => setManualForm({ ...manualForm, overheadCurrency: e.target.value })}
+                                            className="select-industrial w-24 bg-[#f5f5f7]"
+                                        >
+                                            <option value="USD">USD</option>
+                                            <option value="EUR">EUR</option>
+                                            <option value="TRY">TRY</option>
+                                        </select>
+                                    </div>
+                                </div>
                             </div>
-                            <div className="mt-6">
+                            <div className="mt-8">
                                 <button
                                     onClick={handleManualAdd}
-                                    className="w-full bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-colors"
+                                    className="btn-primary-green w-full py-3 flex items-center justify-center text-base"
                                 >
-                                    <Plus className="h-5 w-5" /> Sepete Ekle
+                                    <Plus className="h-5 w-5 mr-2" /> Sepete Ekle
                                 </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* HISTORY TAB */}
+                    {activeTab === 'history' && (
+                        <div className="card-industrial p-6 animate-fade-in">
+                            <h3 className="heading-industrial text-sm mb-6">Hesaplama Geçmişi</h3>
+                            <div className="space-y-4">
+                                {history.length === 0 ? (
+                                    <div className="text-center py-10 text-[#86868b]">Henüz kaydedilmiş hesaplama bulunamadı.</div>
+                                ) : (
+                                    history.map(item => (
+                                        <div key={item.id} className="p-4 bg-[#f5f5f7] rounded-[6px] border border-[#d2d2d7] hover:border-[#86868b] transition-colors">
+                                            <div className="flex justify-between items-start mb-3">
+                                                <div>
+                                                    <div className="font-bold text-[#1d1d1f] text-base">{item.product_name}</div>
+                                                    <div className="text-[11px] text-[#86868b] mt-0.5">{new Date(item.created_at).toLocaleString('tr-TR')}</div>
+                                                </div>
+                                                <div className="text-right">
+                                                    <div className="font-bold text-[#0071e3] text-lg font-mono">{item.unit_price.toFixed(2)} {item.currency}</div>
+                                                    <div className="text-[11px] text-[#86868b]">Maliyet: {item.unit_cost.toFixed(2)} {item.currency}</div>
+                                                </div>
+                                            </div>
+                                            <div className="grid grid-cols-4 gap-2 text-[11px] font-medium text-[#1d1d1f] bg-white p-2 rounded-[4px] border border-[#d2d2d7]">
+                                                <div>Miktar: {item.quantity} kg</div>
+                                                <div>Vade: {item.parameters?.sale_term_days} Gün</div>
+                                                <div>Nakliye: {item.parameters?.shipping_cost}</div>
+                                                <div>Marj: %{item.parameters?.profit_margin_percent}</div>
+                                            </div>
+                                        </div>
+                                    ))
+                                )}
                             </div>
                         </div>
                     )}
@@ -566,35 +743,35 @@ export default function PriceCalculatorModule({ recipes, inventory, exchangeRate
 
                 {/* RIGHT SIDE: BASKET (Keep existing) */}
                 <div className="space-y-6">
-                    <div className="bg-white p-6 rounded-xl shadow-lg border border-slate-200 h-full flex flex-col">
-                        <h3 className="text-lg font-bold mb-4 text-slate-700 flex items-center gap-2">
-                            <ShoppingCart className="h-5 w-5 text-indigo-600" /> Teklif Sepeti
+                    <div className="card-industrial p-6 h-full flex flex-col">
+                        <h3 className="heading-industrial text-sm mb-6 flex items-center gap-2">
+                            <ShoppingCart className="h-5 w-5 text-[#86868b]" /> Teklif Sepeti
                         </h3>
 
-                        <div className="flex-1 overflow-y-auto space-y-3 mb-4 max-h-[400px]">
+                        <div className="flex-1 overflow-y-auto space-y-3 mb-6 max-h-[400px]">
                             {quoteBasket.length === 0 ? (
-                                <div className="text-center text-slate-400 py-8">
+                                <div className="text-center text-[#86868b] py-8 text-sm">
                                     Sepetiniz boş.
                                 </div>
                             ) : (
                                 quoteBasket.map(item => (
-                                    <div key={item.id} className="bg-slate-50 p-3 rounded-lg border border-slate-200 relative group">
-                                        <div className="font-bold text-slate-700">
+                                    <div key={item.id} className="bg-[#f5f5f7] p-3 rounded-[6px] border border-[#d2d2d7] relative group">
+                                        <div className="font-bold text-[#1d1d1f] text-sm">
                                             {item.productName}
-                                            {item.description && <span className="text-xs font-normal text-slate-500 block">{item.description}</span>}
+                                            {item.description && <span className="text-[11px] font-normal text-[#86868b] block mt-0.5">{item.description}</span>}
                                         </div>
-                                        {item.isManual && <span className="text-[10px] bg-slate-200 px-1 rounded text-slate-500">Manuel</span>}
-                                        <div className="text-sm text-slate-500 mt-1">
-                                            {item.unitPrice.toFixed(2)} {item.currency} / {item.formData.packagingId ? 'opsiyonel' : 'dökme'}
+                                        {item.isManual && <span className="badge-industrial badge-industrial-grey mt-1 inline-block">Manuel</span>}
+                                        <div className="text-sm font-medium text-[#1d1d1f] mt-1 font-mono">
+                                            {item.unitPrice.toFixed(2)} {item.currency} <span className="text-[#86868b] font-sans text-xs">/ kg</span>
                                         </div>
                                         {item.totalPrice > 0 && ( // Only show total price if it's calculated (not manual price list)
-                                            <div className="font-bold text-indigo-600 mt-1">
+                                            <div className="font-bold text-[#0071e3] mt-1 text-sm">
                                                 Top: {item.totalPrice.toFixed(2)} {item.currency}
                                             </div>
                                         )}
                                         <button
                                             onClick={() => removeFromBasket(item.id)}
-                                            className="absolute top-2 right-2 text-red-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                                            className="absolute top-2 right-2 text-[#d21e1e] hover:text-red-700 opacity-0 group-hover:opacity-100 transition-opacity"
                                         >
                                             <Trash2 className="h-4 w-4" />
                                         </button>
@@ -603,51 +780,51 @@ export default function PriceCalculatorModule({ recipes, inventory, exchangeRate
                             )}
                         </div>
 
-                        <div className="border-t border-slate-100 pt-4 space-y-4">
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-1">Müşteri Adı</label>
+                        <div className="border-t border-[#d2d2d7] pt-6 space-y-4">
+                            <div className="space-y-1">
+                                <label className="label-industrial">Müşteri Adı</label>
                                 <input
                                     type="text"
                                     value={quoteForm.customerName}
                                     onChange={e => setQuoteForm({ ...quoteForm, customerName: e.target.value })}
-                                    className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                    className="input-industrial"
                                     placeholder="Firma Adı"
                                 />
                             </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-1">İlgili Kişi</label>
+                            <div className="space-y-1">
+                                <label className="label-industrial">İlgili Kişi</label>
                                 <input
                                     type="text"
                                     value={quoteForm.contactPerson}
                                     onChange={e => setQuoteForm({ ...quoteForm, contactPerson: e.target.value })}
-                                    className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                    className="input-industrial"
                                     placeholder="Ad Soyad"
                                 />
                             </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-1">Geçerlilik Tarihi</label>
+                            <div className="space-y-1">
+                                <label className="label-industrial">Geçerlilik Tarihi</label>
                                 <input
                                     type="date"
                                     value={quoteForm.validityDate}
                                     onChange={e => setQuoteForm({ ...quoteForm, validityDate: e.target.value })}
-                                    className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                    className="input-industrial"
                                 />
                             </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-1">Teklif Şartları</label>
+                            <div className="space-y-1">
+                                <label className="label-industrial">Teklif Şartları</label>
                                 <textarea
                                     rows="4"
                                     value={quoteForm.offerConditions}
                                     onChange={e => setQuoteForm({ ...quoteForm, offerConditions: e.target.value })}
-                                    className="w-full border-2 border-slate-200 rounded-lg p-2 text-xs focus:border-indigo-500 focus:outline-none"
+                                    className="input-industrial resize-none text-xs"
                                 />
                             </div>
                             <button
                                 onClick={handleGenerateQuote}
                                 disabled={quoteBasket.length === 0}
-                                className="w-full bg-slate-800 hover:bg-slate-900 disabled:bg-slate-300 text-white px-4 py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-colors"
+                                className="btn-primary w-full py-3 justify-center text-base"
                             >
-                                <FileText className="h-5 w-5" /> PDF Teklif Oluştur
+                                <FileText className="h-5 w-5 mr-2" /> PDF Teklif Oluştur
                             </button>
                         </div>
                     </div>

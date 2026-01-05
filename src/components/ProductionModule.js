@@ -1,18 +1,40 @@
 import React, { useState, useEffect } from 'react';
-import { Factory, Plus, Trash2, Calendar, Package, DollarSign, TrendingUp, Filter, AlertTriangle, FileText, Printer, CheckCircle, X, AlertCircle, Search, Beaker, Loader, Download, RefreshCw, XCircle } from 'lucide-react';
+import { Factory, Plus, Trash2, Calendar, Package, DollarSign, TrendingUp, Filter, AlertTriangle, FileText, Printer, CheckCircle, X, AlertCircle, Search, Beaker, Loader, Download, RefreshCw, XCircle, User } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import QRCode from 'qrcode';
+import JsBarcode from 'jsbarcode';
+import html2canvas from 'html2canvas';
 import { preparePDFWithFont } from '../utils/exportUtils';
+import { drawCIHeader, drawCIFooter, drawCIMetadataGrid, drawCIWrappedText, CI_PALETTE } from '../utils/pdfCIUtils';
 import { supabase } from '../supabaseClient';
 
 // Helper for safety
 const parseInputFloat = (val) => {
-    if (!val) return 0;
-    const num = parseFloat(val);
-    return isNaN(num) ? 0 : num;
+    if (val === null || val === undefined || val === '') return 0;
+    if (typeof val === 'number') return isNaN(val) ? 0 : val;
+    const cleanStr = val.toString().replace(',', '.').replace(/[^0-9.-]/g, '');
+    const parsed = parseFloat(cleanStr);
+    return isNaN(parsed) ? 0 : parsed;
 };
 
-export default function ProductionModule({ session, onRefresh, productions, recipes, inventory, qualitySpecs = [], customers = [], onPlan, onComplete, onDelete }) {
+const formatMoney = (amount, currency = 'TRY') => {
+    const safeAmount = parseInputFloat(amount);
+    const symbols = { USD: '$', EUR: '€', TRY: '₺' };
+    const symbol = symbols[currency] || currency;
+    return symbol + safeAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+const formatDate = (dateString) => {
+    if (!dateString) return '-';
+    try {
+        const date = new Date(dateString);
+        if (isNaN(date.getTime())) return '-';
+        return date.toLocaleDateString('tr-TR');
+    } catch (e) { return '-'; }
+};
+
+export default function ProductionModule({ session, onRefresh, productions, recipes, inventory, qualitySpecs = [], globalSettings = {}, customers = [], onPlan, onComplete, onDelete }) {
     const [viewMode, setViewMode] = useState('list'); // 'list', 'plan', 'complete'
     const [selectedProduction, setSelectedProduction] = useState(null);
 
@@ -41,11 +63,6 @@ export default function ProductionModule({ session, onRefresh, productions, reci
         qcStatus: 'Pass',
         qcNotes: '',
         packagingId: '',
-        shippingCost: 0,
-        overheadCost: 0,
-        saleTermDays: 30,
-        profitMarginPercent: 20,
-        interestRate: 4,
         currency: 'USD'
     });
 
@@ -75,7 +92,18 @@ export default function ProductionModule({ session, onRefresh, productions, reci
     };
 
     const handleCompleteClick = (production) => {
+        const recipe = recipes.find(r => r.id === production.recipe_id);
+        const product = inventory.find(i => i.id === recipe?.product_id);
+
         setSelectedProduction(production);
+        setCompleteForm({
+            ...completeForm,
+            qcStatus: 'Pass',
+            qcNotes: '',
+            packagingId: production.target_packaging_id || '',
+            packagingCount: production.target_package_count || '',
+            currency: product?.currency || 'USD'
+        });
         setViewMode('complete');
     };
 
@@ -86,15 +114,8 @@ export default function ProductionModule({ session, onRefresh, productions, reci
                 setViewMode('list');
                 setSelectedProduction(null);
                 setCompleteForm({
-                    packagingId: '',
-                    shippingCost: 0,
-                    overheadCost: 0,
-                    saleTermDays: 30,
-                    profitMarginPercent: 20,
                     qcStatus: 'Pass',
-                    qcNotes: '',
-                    currency: 'USD',
-                    interestRate: 4
+                    qcNotes: ''
                 });
             }
         });
@@ -119,6 +140,239 @@ export default function ProductionModule({ session, onRefresh, productions, reci
     };
 
 
+    // ==================== LABEL PRINTING ====================
+    // ==================== LABEL PRINTING ====================
+    const handlePrintLabel = async (prod) => {
+        // Create a hidden container for the label
+        const containerId = 'label-print-container';
+        let container = document.getElementById(containerId);
+        if (container) document.body.removeChild(container);
+
+        container = document.createElement('div');
+        container.id = containerId;
+        // Styles to match 214mm x 152mm (214mm width, 152mm height)
+        // High resolution scale
+        container.style.position = 'fixed';
+        container.style.left = '-9999px'; // Hidden
+        // container.style.left = '10px'; // DEBUG: Show on screen
+        container.style.top = '0';
+        container.style.width = '214mm';
+        container.style.height = '152mm';
+        container.style.backgroundColor = 'white';
+        container.style.boxSizing = 'border-box';
+        container.style.fontFamily = "'Oswald', 'Roboto Condensed', 'Roboto', sans-serif";
+
+        // Inner Content Data
+        const invItem = inventory.find(i => i.name === prod.product_name);
+        const prodCode = invItem?.product_code || 'CODE-???';
+        const symbols = invItem?.ghs_symbols || [];
+        const shelfLifeMonths = invItem?.shelf_life_months || 24;
+
+        // Brüt estimation: Net + 2% for plastic drums/canisters as a generic rule fallback if no package info
+        // Ideally we would look up package type from `prod.target_packaging_id`.
+        // Let's assume a standard tare or just placeholder if unknown.
+        let grossWeight = '-';
+        if (prod.quantity) {
+            const net = parseFloat(prod.quantity);
+            // Simple estimation: Net * 1.05 (5% tare)
+            grossWeight = (net * 1.05).toFixed(2);
+        }
+
+        const prodDate = new Date(prod.production_date);
+        const expDate = new Date(prodDate);
+        expDate.setMonth(expDate.getMonth() + shelfLifeMonths);
+
+        // --- CLINICAL CI THEME ---
+        const theme = {
+            primary: '#1d1d1f', // Monolithic Black
+            accent: '#0071e3',  // Apple Blue
+            border: '#d2d2d7',  // Hairline Grey
+            text: '#1d1d1f',
+            textLight: '#86868b'
+        };
+
+        // Build GHS Diamonds HTML
+        const ghsDiamondsHtml = symbols.length > 0 ? symbols.slice(0, 4).map(s => {
+            let char = '!';
+            if (s === 'flammable') char = 'F';
+            if (s === 'corrosive') char = 'C';
+            if (s === 'toxic') char = 'T';
+            if (s === 'environment') char = 'N';
+            if (s === 'oxidizing') char = 'O';
+            if (s === 'health') char = '*';
+
+            return `
+                <div style="width: 85px; height: 85px; position: relative; display:inline-block; margin: 4px;">
+                    <svg viewBox="0 0 100 100" style="width:100%; height:100%;">
+                        <path d="M50 5 L95 50 L50 95 L5 50 Z" fill="white" stroke="#d00" stroke-width="6" />
+                        <text x="50" y="65" font-size="48" font-family="Arial" font-weight="bold" text-anchor="middle" fill="black">${char}</text>
+                    </svg>
+                </div>
+             `;
+        }).join('') : `
+             <div style="width: 85px; height: 85px; position: relative; display:inline-block; margin: 4px;">
+                <svg viewBox="0 0 100 100" style="width:100%; height:100%;">
+                    <path d="M50 5 L95 50 L50 95 L5 50 Z" fill="white" stroke="#d00" stroke-width="6" />
+                    <text x="50" y="65" font-size="48" font-family="Arial" font-weight="bold" text-anchor="middle" fill="black">!</text>
+                </svg>
+             </div>
+        `;
+
+        container.innerHTML = `
+            <div style="display: flex; flex-direction: column; height: 100%; width: 100%; background: white; position: relative; color: #1d1d1f; font-family: 'Inter', -apple-system, sans-serif;">
+                
+                <!-- NEW HEADER: BRAND & TRACKING -->
+                <div style="background-color: white; color: ${theme.primary}; padding: 0 40px; display: flex; justify-content: space-between; align-items: center; height: 12%; border-bottom: 2px solid #000;">
+                     <div style="font-size: 36px; font-weight: 900; letter-spacing: -1.5px;">
+                        GROHN KİMYA
+                     </div>
+                     <div style="display: flex; flex-direction: column; align-items: center; margin-right: 80px;">
+                        <div style="font-size: 8px; font-weight: 700; color: ${theme.textLight}; letter-spacing: 1px; margin-bottom: 2px;">PRODUCT TRACKING CODE</div>
+                        <svg id="barcode-target" style="width: 140px; height: 40px;"></svg>
+                     </div>
+                </div>
+
+                <!-- QR CODE: COMPACT FLOATING -->
+                <div style="position: absolute; top: 10px; right: 15px; background: white; padding: 5px; border: 1px solid rgba(0,0,0,0.1); border-radius: 4px; z-index: 10;">
+                    <canvas id="qr-canvas-target" style="width: 55px; height: 55px;"></canvas>
+                </div>
+
+                <!-- MAIN AREA -->
+                <div style="display: flex; flex: 1; height: 73%;">
+                    
+                    <!-- LEFT PANEL: HIGHLIGHTS -->
+                    <div style="flex: 60; padding: 40px; display: flex; flex-direction: column; border-right: 2px solid #000;">
+                        
+                        <!-- PRODUCT SECTION -->
+                        <div style="margin-bottom: 30px;">
+                             <div style="font-size: 14px; color: ${theme.accent}; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 10px;">PRODUCT / ÜRÜN</div>
+                             
+                             <h1 style="font-size: 72px; font-weight: 900; line-height: 0.95; margin: 0; color: ${theme.primary}; text-transform: uppercase; letter-spacing: -2px;">
+                                ${prod.product_name || 'KİMYASAL ÜRÜN'}
+                             </h1>
+
+                             <div style="display: flex; align-items: center; margin-top: 25px; border-top: 2px solid #000; padding-top: 15px;">
+                                 <div style="font-size: 11px; font-weight: 900; color: ${theme.textLight}; letter-spacing: 1px; width: 120px;">CODE / ÜRÜN KODU:</div>
+                                 <div style="font-size: 32px; font-weight: 800; color: ${theme.primary};">${prodCode}</div>
+                             </div>
+                        </div>
+
+                        <!-- METADATA GRID -->
+                        <div style="margin-top: auto; display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid ${theme.border};">
+                             
+                             <!-- Row 1 -->
+                             <div style="padding: 15px 0; border-right: 1px solid #eee; border-bottom: 1px solid #eee;">
+                                <div style="font-size: 9px; text-transform: uppercase; color: ${theme.accent}; font-weight: 800; letter-spacing: 1.5px;">LOT / BATCH NO</div>
+                                <div style="font-size: 24px; font-weight: 800; color: #000;">${prod.lot_number || '-'}</div>
+                             </div>
+
+                             <div style="padding: 15px 0 15px 30px; border-bottom: 1px solid #eee;">
+                                <div style="font-size: 9px; text-transform: uppercase; color: ${theme.accent}; font-weight: 800; letter-spacing: 1.5px;">ÜRETİM / PROD. DATE</div>
+                                <div style="font-size: 24px; font-weight: 800; color: #000;">${prodDate.toLocaleDateString('tr-TR')}</div>
+                             </div>
+
+                             <!-- Row 2 -->
+                             <div style="padding: 15px 0; border-right: 1px solid #eee; border-bottom: 1px solid #eee;">
+                                <div style="font-size: 9px; text-transform: uppercase; color: ${theme.accent}; font-weight: 800; letter-spacing: 1.5px;">NET / NET KG</div>
+                                <div style="font-size: 32px; font-weight: 900; color: #000;">${prod.quantity} <span style="font-size: 16px;">kg</span></div>
+                             </div>
+
+                             <div style="padding: 15px 0 15px 30px; border-bottom: 1px solid #eee;">
+                                <div style="font-size: 9px; text-transform: uppercase; color: ${theme.accent}; font-weight: 800; letter-spacing: 1.5px;">GROSS / BRÜT KG</div>
+                                <div style="font-size: 32px; font-weight: 900; color: #000;">${grossWeight} <span style="font-size: 16px;">kg</span></div>
+                             </div>
+
+                             <!-- Row 3: EXPIRY -->
+                             <div style="padding: 15px 0; grid-column: span 2;">
+                                <div style="font-size: 9px; text-transform: uppercase; color: ${theme.error_red || '#d00'}; font-weight: 800; letter-spacing: 1.5px;">S.K.T. / EXP. DATE</div>
+                                <div style="font-size: 24px; font-weight: 800; color: #000;">${expDate.toLocaleDateString('tr-TR')}</div>
+                             </div>
+                        </div>
+                    </div>
+
+                    <!-- RIGHT PANEL: SAFETY -->
+                    <div style="flex: 40; background-color: #fff; display: flex; flex-direction: column; align-items: center; padding: 40px 20px;">
+                        
+                        <div style="font-size: 11px; font-weight: 900; color: #000; letter-spacing: 3px; text-transform: uppercase; margin-bottom: 25px; border-bottom: 3px solid ${theme.accent}; padding-bottom: 8px; width: 100%; text-align: center;">HAZARD SYMBOLS / GHS</div>
+                        
+                        <div style="width: 100%; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; flex: 1; align-content: flex-start;">
+                            ${ghsDiamondsHtml}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- FOOTER -->
+                <div style="background-color: ${theme.primary}; color: white; height: 15%; display: flex; flex-direction: column; justify-content: center; padding: 0 40px; font-size: 11px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div style="flex: 1;">
+                            <div style="font-weight: 800; font-size: 14px; color: ${theme.accent};">${globalSettings.company_name || 'GROHN TEKSTİL VE KİMYA ÜRÜNLERİ'}</div>
+                            <div style="font-size: 10px; opacity: 0.8;">${globalSettings.company_address || 'Velimeşe OSB, Ergene / Tekirdağ'}</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="font-weight: 700;">www.grohn.com.tr</div>
+                            <div style="font-size: 10px; opacity: 0.8;">${globalSettings.company_phone || '+90 539 880 23 46'}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(container);
+
+        // Render Codes
+        try {
+            const qrCanvas = document.getElementById('qr-canvas-target');
+            await QRCode.toCanvas(qrCanvas, `https://www.grohn.com.tr`, {
+                width: 60,
+                margin: 0,
+                color: { dark: theme.primary, light: '#ffffff' }
+            });
+
+            JsBarcode("#barcode-target", prodCode.replace(/[^a-zA-Z0-9]/g, '') || '123456', {
+                format: "CODE128",
+                width: 1.5,
+                height: 35,
+                displayValue: true,
+                fontSize: 10,
+                font: 'Inter',
+                margin: 0,
+                background: "transparent"
+            });
+        } catch (e) {
+            console.error('Code gen error', e);
+        }
+
+        // Snapshot
+        try {
+            // Wait a moment for fonts/Styles
+            await new Promise(r => setTimeout(r, 150)); // Slightly longer delay
+
+            const canvas = await html2canvas(container, {
+                scale: 2, // High res
+                logging: false,
+                useCORS: true,
+                backgroundColor: '#ffffff'
+            });
+            const imgData = canvas.toDataURL('image/png');
+
+            // Create PDF
+            const doc = new jsPDF({
+                orientation: 'landscape',
+                unit: 'mm',
+                format: [214, 152]
+            });
+            doc.addImage(imgData, 'PNG', 0, 0, 214, 152);
+            doc.save(`${prod.lot_number}_Etiket.pdf`);
+        } catch (err) {
+            console.error('Canvas Error', err);
+            alert('Etiket oluşturulurken hata oluştu: ' + err.message);
+        } finally {
+            // Cleanup
+            if (document.body.contains(container)) document.body.removeChild(container);
+        }
+    };
+
+
     const handlePrintWorkOrder = async (production) => {
         const recipe = recipes.find(r => r.id === production.recipe_id);
         const product = inventory.find(i => i.id === recipe?.product_id);
@@ -128,71 +382,54 @@ export default function ProductionModule({ session, onRefresh, productions, reci
         const doc = await preparePDFWithFont();
         const fontName = doc.activeFont || 'helvetica';
 
-        // ... (PDF Generation Logic - unchanged for brevity/consistency)
-        // Replicating previous logic to ensure no regression
-        doc.setFillColor(63, 81, 181);
-        doc.rect(0, 0, 210, 40, 'F');
+        // Initial Header (Professional Layout)
+        const docDate = new Date(production.production_date).toLocaleDateString('tr-TR');
+        drawCIHeader(doc, 'ÜRETİM İŞ EMRİ', 'ÜRETİM OPERASYON MERKEZİ', docDate, production.lot_number);
+        const startY = 45;
 
-        doc.setTextColor(255, 255, 255);
-        doc.setFontSize(24);
-        doc.setFont(fontName, 'bold');
-        doc.text('ÜRETİM İŞ EMRİ', 105, 20, null, null, 'center');
-        doc.setFontSize(10);
-        doc.text('GROHN Kimya A.Ş.', 105, 30, null, null, 'center');
+        // Metadata Grid (Cleaned)
+        const metaData = [
+            { label: 'ÜRÜN', value: product?.name || '-' },
+            { label: 'HEDEF MİKTAR', value: `${production.quantity} kg` },
+            { label: 'MÜŞTERİ', value: customer ? customer.name : 'STOK ÜRETİMİ' },
+            { label: 'REÇETE KODU', value: `#${recipe?.id || '-'}` }
+        ];
+        let currY = drawCIMetadataGrid(doc, 14, startY, metaData, 2);
+        currY += 5; // Spacing after grid
 
-        doc.setTextColor(0, 0, 0);
-        doc.setFontSize(11);
-        doc.setFont(fontName, 'normal');
-        const startY = 50;
-
-        doc.setFont(fontName, 'bold');
-        doc.text('İş Emri No:', 14, startY);
-        doc.text('Tarih:', 14, startY + 8);
-        doc.text('Hedef Miktar:', 14, startY + 16);
-        doc.text('Müşteri:', 14, startY + 24);
-
-        doc.setFont(fontName, 'normal');
-        doc.text(production.lot_number, 50, startY);
-        doc.text(new Date(production.production_date).toLocaleDateString('tr-TR'), 50, startY + 8);
-        doc.text(`${production.quantity} kg`, 50, startY + 16);
-        doc.text(customer ? customer.name : 'Stok Üretimi', 50, startY + 24);
-
-        doc.setFont(fontName, 'bold');
-        doc.text('Ürün:', 110, startY);
-        doc.text('Reçete:', 110, startY + 8);
-
-        let packingY = startY + 32;
-        doc.setFont(fontName, 'normal');
-        doc.text(product?.name || '-', 140, startY);
-        const recipeName = recipe?.name || (recipe?.customer_id ? 'Müşteri Özel Reçetesi' : 'Standart Reçete');
-        doc.text(`${recipeName} (#${recipe?.id || '-'})`, 140, startY + 8);
-
+        // Packaging Instructions (Highlight Box)
         if (production.target_packaging_id) {
             const pkg = inventory.find(i => i.id === production.target_packaging_id);
             if (pkg) {
+                doc.setFillColor(...CI_PALETTE.clinical_bg);
+                doc.rect(14, currY, 182, 14, 'F');
+                doc.setDrawColor(...CI_PALETTE.hairline_grey);
+                doc.setLineWidth(0.05);
+                doc.line(14, currY, 196, currY);
+                doc.line(14, currY + 14, 196, currY + 14);
+
+                doc.setFontSize(7);
                 doc.setFont(fontName, 'bold');
-                doc.text('Dolum:', 14, packingY);
-                doc.setFont(fontName, 'normal');
-                doc.text(`${pkg.name} x ${production.target_package_count} Adet`, 50, packingY);
+                doc.setTextColor(...CI_PALETTE.neutral_grey);
+                doc.text('DOLUM TALİMATI', 18, currY + 5);
+
                 doc.setFontSize(9);
-                doc.text(`(Beher ambalaj: ${pkg.capacity_value} ${pkg.capacity_unit})`, 50, packingY + 5);
-                doc.setFontSize(11);
-                packingY += 12;
+                doc.setFont(fontName, 'normal');
+                doc.setTextColor(...CI_PALETTE.pure_black);
+                doc.text(`${pkg.name} | ${production.target_package_count} ADET | (Birim: ${pkg.capacity_value} ${pkg.capacity_unit})`, 18, currY + 10);
+                currY += 20;
             }
         }
 
         if (production.notes) {
-            doc.setFillColor(240, 240, 240);
-            doc.rect(14, packingY, 182, 10, 'F');
-            doc.setFont(fontName, 'italic');
-            doc.text(`Notlar: ${production.notes}`, 16, packingY + 6);
+            currY = drawCIWrappedText(doc, 14, currY, 'NOTLAR', production.notes);
         }
 
         const pkgCount = parseInputFloat(production.target_package_count);
         const hasPackaging = production.target_packaging_id && pkgCount > 0;
         let tableHeaders = ['Hammadde', 'Kod', 'Oran', 'Toplam Miktar'];
-        if (hasPackaging) tableHeaders.push('Ambalaj Başına');
-        tableHeaders.push('Tartım Onay');
+        if (hasPackaging) tableHeaders.push('Birim Miktar');
+        tableHeaders.push('Tartım Onayı');
 
         const tableData = ingredients.map(ing => {
             const item = inventory.find(i => i.id === ing.itemId);
@@ -212,107 +449,137 @@ export default function ProductionModule({ session, onRefresh, productions, reci
         });
 
         autoTable(doc, {
-            startY: packingY + 15,
+            startY: currY + 5,
             head: [tableHeaders],
             body: tableData,
             theme: 'grid',
-            headStyles: { fillColor: [63, 81, 181], textColor: 255 },
-            styles: { fontSize: 10, cellPadding: 3, font: fontName },
-            columnStyles: { [hasPackaging ? 5 : 4]: { halign: 'center' } }
+            headStyles: { fillColor: CI_PALETTE.pure_black, textColor: 255, fontSize: 7, font: fontName, fontStyle: 'bold' },
+            bodyStyles: { fontSize: 8, cellPadding: 3, font: fontName, textColor: CI_PALETTE.pure_black },
+            columnStyles: { [hasPackaging ? 5 : 4]: { halign: 'center' } },
+            margin: { top: 40, bottom: 35 },
+            didDrawPage: (data) => {
+                const docDate = new Date(production.production_date).toLocaleDateString('tr-TR');
+                drawCIHeader(doc, 'ÜRETİM İŞ EMRİ', 'ÜRETİM OPERASYON MERKEZİ', docDate, production.lot_number);
+                drawCIFooter(doc, globalSettings, 'Üretim Modülü v5.3.0');
+            }
         });
 
+        // QC Parameters (Checklist Style)
         let finalY = doc.lastAutoTable.finalY + 15;
-        doc.setFont(fontName, 'bold');
-        doc.text('KALİTE KONTROL PARAMETRELERİ', 14, finalY);
-        doc.line(14, finalY + 2, 200, finalY + 2);
-        finalY += 10;
 
-        const productSpecs = qualitySpecs.filter(s => s.product_id === product?.id);
-        let qcItems = productSpecs.length > 0 ? productSpecs.map(s => [
-            s.parameter_name, `min: ${s.min_value || '-'}  max: ${s.max_value || '-'}`, '__________'
-        ]) : [['Görünüş', 'Standart', '__________'], ['Renk', 'Standart', '__________'], ['pH', 'Spec', '__________']];
+        // Space Check - If not enough space for QC + Signatures, move to new page
+        if (finalY > 220) {
+            doc.addPage();
+            const docDate = new Date(production.production_date).toLocaleDateString('tr-TR');
+            drawCIHeader(doc, 'ÜRETİM İŞ EMRİ', 'ÜRETİM OPERASYON MERKEZİ', docDate, production.lot_number);
+            drawCIFooter(doc, globalSettings, 'Üretim Modülü v5.3.0');
+            finalY = 45;
+        }
 
-        autoTable(doc, {
-            startY: finalY,
-            head: [['Parametre', 'Standart', 'Ölçülen Değer']],
-            body: qcItems,
-            theme: 'plain',
-            styles: { fontSize: 10, cellPadding: 2, font: fontName },
-            columnStyles: { 0: { fontStyle: 'bold', cellWidth: 60 } }
-        });
+        if (finalY < 230) {
+            doc.setFont(fontName, 'bold');
+            doc.setFontSize(8);
+            doc.setTextColor(...CI_PALETTE.apple_blue);
+            doc.text('KALİTE KONTROL PARAMETRELERİ', 14, finalY);
+            doc.setDrawColor(...CI_PALETTE.hairline_grey);
+            doc.setLineWidth(0.05);
+            doc.line(14, finalY + 2, 196, finalY + 2);
+            finalY += 8;
 
-        finalY = doc.lastAutoTable.finalY + 20;
-        doc.setFont(fontName, 'bold');
-        doc.text('Üretim Sorumlusu', 30, finalY);
-        doc.text('Kalite Kontrol', 140, finalY);
-        doc.rect(30, finalY + 5, 50, 20);
-        doc.rect(140, finalY + 5, 50, 20);
-        doc.save(`is_emri_${production.lot_number}.pdf`);
+            const productSpecs = qualitySpecs.filter(s => s.product_id === product?.id);
+            let qcItems = productSpecs.length > 0 ? productSpecs.map(s => [
+                s.parameter_name, `LİMİT: ${s.min_value || '-'} - ${s.max_value || '-'}`, '__________'
+            ]) : [['Görünüş', 'Standart', '__________'], ['Renk', 'Standart', '__________'], ['pH', 'Spec', '__________']];
+
+            autoTable(doc, {
+                startY: finalY,
+                head: [['Parametre', 'Kriter', 'Ölçülen']],
+                body: qcItems,
+                theme: 'plain',
+                styles: { fontSize: 8, cellPadding: 2, font: fontName },
+                headStyles: { textColor: CI_PALETTE.neutral_grey, fontStyle: 'bold' },
+                columnStyles: { 0: { fontStyle: 'bold', cellWidth: 60 } }
+            });
+
+            // Clinical Signatures
+            finalY = doc.lastAutoTable.finalY + 20;
+            doc.setDrawColor(...CI_PALETTE.hairline_grey);
+            doc.line(14, finalY + 15, 74, finalY + 15);
+            doc.line(136, finalY + 15, 196, finalY + 15);
+
+            doc.setFontSize(7);
+            doc.setFont(fontName, 'bold');
+            doc.setTextColor(...CI_PALETTE.neutral_grey);
+            doc.text('ÜRETİM SORUMLUSU', 14, finalY);
+            doc.text('KALİTE KONTROL ONAYI', 136, finalY);
+        }
+
+        doc.save(`WorkOrder_${production.lot_number}.pdf`);
     };
 
     const handlePrintRevisionOrder = async (production) => {
         const recipe = recipes.find(r => r.id === production.recipe_id);
         const product = inventory.find(i => i.id === recipe?.product_id);
-        const customer = customers.find(c => c.id === production.customer_id);
 
         const doc = await preparePDFWithFont();
         const fontName = doc.activeFont || 'helvetica';
 
-        // HEADER (RED for Revision)
-        doc.setFillColor(220, 38, 38); // Red-600
-        doc.rect(0, 0, 210, 40, 'F');
+        // Initial Header (Special Revision Look)
+        drawCIHeader(doc, 'REVİZYON İŞ EMRİ', 'ÜRETİM OPERASYON MERKEZİ');
 
-        doc.setTextColor(255, 255, 255);
-        doc.setFontSize(24);
+        // Manual Red Override for Revision Style
+        doc.setFontSize(14);
+        doc.setTextColor(...CI_PALETTE.error_red);
         doc.setFont(fontName, 'bold');
-        doc.text('REVİZYON / DÜZELTME İŞ EMRİ', 105, 20, null, null, 'center');
-        doc.setFontSize(10);
-        doc.text('GROHN Kimya A.Ş.', 105, 30, null, null, 'center');
+        doc.text('GROHN', 14, 25);
+        doc.setTextColor(...CI_PALETTE.pure_black);
 
-        doc.setTextColor(0, 0, 0);
-        doc.setFontSize(11);
-        doc.setFont(fontName, 'normal');
-        const startY = 50;
+        const startY = 45;
 
-        doc.setFont(fontName, 'bold');
-        doc.text('İş Emri No:', 14, startY);
-        doc.text('Tarih:', 14, startY + 8);
-        doc.text('Hedef Miktar:', 14, startY + 16);
-        doc.text('Ürün:', 14, startY + 24);
+        // Metadata Grid for Revision
+        const metaData = [
+            { label: 'PARTİ NO', value: production.lot_number || '-' },
+            { label: 'TARİH', value: new Date(production.production_date).toLocaleDateString('tr-TR') },
+            { label: 'ÜRÜN', value: product?.name || '-' },
+            { label: 'MİKTAR', value: `${production.quantity} kg` }
+        ];
+        drawCIMetadataGrid(doc, 14, startY, metaData, 2);
 
-        doc.setFont(fontName, 'normal');
-        doc.text(production.lot_number, 50, startY);
-        doc.text(new Date(production.production_date).toLocaleDateString('tr-TR'), 50, startY + 8);
-        doc.text(`${production.quantity} kg`, 50, startY + 16);
-        doc.text(product?.name || '-', 50, startY + 24);
+        let currentY = startY + 30;
 
-        let currentY = startY + 35;
-
-        // ADJUSTMENT INSTRUCTIONS BOX
+        // ADJUSTMENT INSTRUCTIONS BOX (High Contrast)
         doc.setFillColor(255, 247, 237); // Orange-50
-        doc.setDrawColor(249, 115, 22); // Orange-500
-        doc.rect(14, currentY, 182, 40, 'FD');
+        doc.setDrawColor(...CI_PALETTE.industrial_orange);
+        doc.setLineWidth(0.1);
+        doc.rect(14, currentY, 182, 45, 'FD');
 
         doc.setFont(fontName, 'bold');
-        doc.setTextColor(194, 65, 12); // Orange-800
-        doc.text('YAPILACAK DÜZELTME / İLAVE İŞLEMİ:', 20, currentY + 8);
+        doc.setFontSize(8);
+        doc.setTextColor(...CI_PALETTE.industrial_orange);
+        doc.text('YAPILACAK DÜZELTME / İLAVE İŞLEMLERİ:', 20, currentY + 8);
 
         doc.setFont(fontName, 'normal');
+        doc.setFontSize(10);
         doc.setTextColor(0, 0, 0);
-        const splitNotes = doc.splitTextToSize(production.adjustment_notes || 'Belirtilen bir not yok.', 170);
-        doc.text(splitNotes, 20, currentY + 16);
+        const splitNotes = doc.splitTextToSize(production.adjustment_notes || 'Detaylı düzeltme talimatı girilmemiş.', 170);
+        doc.text(splitNotes, 20, currentY + 18);
 
-        currentY += 50;
+        currentY += 60;
 
         // Signatures
-        doc.setFont(fontName, 'bold');
-        doc.text('Üretim Sorumlusu', 30, currentY);
-        doc.text('Kalite Kontrol', 140, currentY);
-        doc.setDrawColor(0);
-        doc.rect(30, currentY + 5, 50, 20);
-        doc.rect(140, currentY + 5, 50, 20);
+        doc.setDrawColor(...CI_PALETTE.hairline_grey);
+        doc.line(14, currentY + 15, 74, currentY + 15);
+        doc.line(136, currentY + 15, 196, currentY + 15);
 
-        doc.save(`revizyon_emri_${production.lot_number}.pdf`);
+        doc.setFontSize(7);
+        doc.setFont(fontName, 'bold');
+        doc.setTextColor(...CI_PALETTE.neutral_grey);
+        doc.text('ÜRETİM SORUMLUSU', 14, currentY);
+        doc.text('KALİTE KONTROL ONAYI', 136, currentY);
+
+        drawCIFooter(doc, globalSettings, 'Revizyon Modülü v5.3.0');
+
+        doc.save(`Revizyon_Emri_${production.lot_number}.pdf`);
     };
 
     // --- FILTER LOGIC ---
@@ -346,14 +613,14 @@ export default function ProductionModule({ session, onRefresh, productions, reci
     return (
         <div className="space-y-6">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-                    <Factory className="h-6 w-6 text-indigo-600" /> Üretim Yönetimi
+                <h2 className="heading-industrial text-2xl flex items-center gap-2">
+                    <Factory className="h-6 w-6 text-[#0071e3]" /> ÜRETİM YÖNETİMİ
                 </h2>
                 <div className="flex gap-2">
                     {viewMode === 'list' && (
                         <button
                             onClick={() => setViewMode('plan')}
-                            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+                            className="btn-primary flex items-center gap-2"
                         >
                             <Plus className="h-4 w-4" /> Yeni Plan
                         </button>
@@ -371,15 +638,15 @@ export default function ProductionModule({ session, onRefresh, productions, reci
 
             {/* FILTER BAR - Only in List Mode */}
             {viewMode === 'list' && (
-                <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
+                <div className="card-industrial p-4 grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
                     <div className="md:col-span-2">
-                        <label className="text-xs font-bold text-slate-500 uppercase">Arama</label>
+                        <label className="label-industrial block">Arama</label>
                         <div className="relative">
-                            <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                            <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
                             <input
                                 type="text"
                                 placeholder="LOT, Ürün veya Müşteri ara..."
-                                className="w-full pl-9 p-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500"
+                                className="input-industrial pl-9"
                                 value={filterText}
                                 onChange={e => setFilterText(e.target.value)}
                             />
@@ -387,9 +654,9 @@ export default function ProductionModule({ session, onRefresh, productions, reci
                     </div>
 
                     <div>
-                        <label className="text-xs font-bold text-slate-500 uppercase">Durum</label>
+                        <label className="label-industrial block">Durum</label>
                         <select
-                            className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500"
+                            className="select-industrial"
                             value={filterStatus}
                             onChange={e => setFilterStatus(e.target.value)}
                         >
@@ -400,14 +667,14 @@ export default function ProductionModule({ session, onRefresh, productions, reci
                     </div>
 
                     <div>
-                        <label className="text-xs font-bold text-slate-500 uppercase">Müşteri</label>
+                        <label className="label-industrial block">Müşteri</label>
                         <select
-                            className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500"
+                            className="select-industrial"
                             value={filterCustomer}
                             onChange={e => setFilterCustomer(e.target.value)}
                         >
                             <option value="">Tümü</option>
-                            <option value="0">Stok (Müşterisiz)</option> {/* Special case if needed, or handle null */}
+                            <option value="0">Stok (Müşterisiz)</option>
                             {customers.map(c => (
                                 <option key={c.id} value={c.id}>{c.name}</option>
                             ))}
@@ -415,19 +682,19 @@ export default function ProductionModule({ session, onRefresh, productions, reci
                     </div>
 
                     <div>
-                        <label className="text-xs font-bold text-slate-500 uppercase">Başlangıç</label>
+                        <label className="label-industrial block">Başlangıç</label>
                         <input
                             type="date"
-                            className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 text-sm"
+                            className="input-industrial"
                             value={filterDateStart}
                             onChange={e => setFilterDateStart(e.target.value)}
                         />
                     </div>
                     <div>
-                        <label className="text-xs font-bold text-slate-500 uppercase">Bitiş</label>
+                        <label className="label-industrial block">Bitiş</label>
                         <input
                             type="date"
-                            className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 text-sm"
+                            className="input-industrial"
                             value={filterDateEnd}
                             onChange={e => setFilterDateEnd(e.target.value)}
                         />
@@ -437,11 +704,11 @@ export default function ProductionModule({ session, onRefresh, productions, reci
 
             {/* PLANNING FORM */}
             {viewMode === 'plan' && (
-                <div className="bg-white p-6 rounded-xl shadow-lg border border-slate-200">
-                    <h3 className="text-lg font-bold mb-4 text-slate-700">Yeni Üretim Planı</h3>
+                <div className="card-industrial p-6">
+                    <h3 className="text-lg font-bold mb-4 text-[#1d1d1f] uppercase tracking-tight">Yeni Üretim Planı</h3>
                     <form onSubmit={handlePlanSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Reçete / Ürün</label>
+                            <label className="label-industrial block">Reçete / Ürün</label>
                             <select
                                 required
                                 value={planForm.recipeId}
@@ -461,7 +728,7 @@ export default function ProductionModule({ session, onRefresh, productions, reci
                                     }
                                     setPlanForm({ ...planForm, recipeId: rId, density: newDensity });
                                 }}
-                                className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                className="select-industrial"
                             >
                                 <option value="">Seçiniz...</option>
                                 {recipes.map(r => {
@@ -472,22 +739,22 @@ export default function ProductionModule({ session, onRefresh, productions, reci
                         </div>
 
                         <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Müşteri (Opsiyonel)</label>
+                            <label className="label-industrial block">Müşteri (Opsiyonel)</label>
                             <select
                                 value={planForm.customerId}
                                 onChange={e => setPlanForm({ ...planForm, customerId: e.target.value })}
-                                className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                className="select-industrial"
                             >
                                 <option value="">Stok Üretimi (Seçiniz...)</option>
                                 {customers.map(c => (
                                     <option key={c.id} value={c.id}>{c.name}</option>
                                 ))}
                             </select>
-                            <p className="text-[10px] text-slate-400 mt-1">Özel sipariş ise seçiniz.</p>
+                            <p className="text-[10px] text-gray-400 mt-1 font-medium">Özel sipariş ise seçiniz.</p>
                         </div>
 
                         <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Planlanan Miktar (kg)</label>
+                            <label className="label-industrial block">Planlanan Miktar (kg)</label>
                             <input
                                 required
                                 type="number"
@@ -500,31 +767,31 @@ export default function ProductionModule({ session, onRefresh, productions, reci
                                     }
                                     setPlanForm({ ...planForm, quantity: qty, targetPackageCount: count });
                                 }}
-                                className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                className="input-industrial"
                             />
                         </div>
                         <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Üretim Tarihi</label>
+                            <label className="label-industrial block">Üretim Tarihi</label>
                             <input
                                 required
                                 type="date"
                                 value={planForm.productionDate}
                                 onChange={e => setPlanForm({ ...planForm, productionDate: e.target.value })}
-                                className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                className="input-industrial"
                             />
                         </div>
 
-                        <div className="md:col-span-2 bg-indigo-50 p-4 rounded-lg border border-indigo-100">
-                            <h4 className="font-bold text-indigo-700 mb-2 flex items-center gap-2">
+                        <div className="md:col-span-2 bg-[#fbfbfd] p-4 rounded-[6px] border border-[#d2d2d7]">
+                            <h4 className="font-bold text-[#1d1d1f] mb-2 flex items-center gap-2 text-sm uppercase">
                                 <Package className="h-4 w-4" /> Dolum / Ambalaj Planı
                             </h4>
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                 <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-1">Hedef Ambalaj</label>
+                                    <label className="label-industrial block">Hedef Ambalaj</label>
                                     <select
                                         value={planForm.targetPackagingId}
                                         onChange={e => setPlanForm({ ...planForm, targetPackagingId: e.target.value })}
-                                        className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                        className="select-industrial"
                                     >
                                         <option value="">Seçiniz (Opsiyonel)</option>
                                         {inventory.filter(i => i.type === 'Ambalaj').map(i => (
@@ -535,7 +802,7 @@ export default function ProductionModule({ session, onRefresh, productions, reci
                                     </select>
                                 </div>
                                 <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-1">Ambalaj Başına Net Dolum (kg)</label>
+                                    <label className="label-industrial block">Ambalaj Başına Net Dolum (kg)</label>
                                     <input
                                         type="number"
                                         step="0.01"
@@ -548,33 +815,33 @@ export default function ProductionModule({ session, onRefresh, productions, reci
                                             }
                                             setPlanForm({ ...planForm, netFilling: val, targetPackageCount: count });
                                         }}
-                                        className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                        className="input-industrial"
                                         placeholder="Örn: 20"
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-1">Hesaplanan Adet</label>
+                                    <label className="label-industrial block">Hesaplanan Adet</label>
                                     <input
                                         type="number"
                                         value={planForm.targetPackageCount}
                                         readOnly
-                                        className="w-full bg-slate-100 border-2 border-slate-200 rounded-lg p-2 text-slate-500 font-mono"
+                                        className="input-industrial bg-gray-50 text-gray-500 cursor-not-allowed"
                                     />
                                 </div>
                             </div>
                         </div>
 
                         <div className="md:col-span-2">
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Notlar</label>
+                            <label className="label-industrial block">Notlar</label>
                             <input
                                 type="text"
                                 value={planForm.notes}
                                 onChange={e => setPlanForm({ ...planForm, notes: e.target.value })}
-                                className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                className="input-industrial"
                             />
                         </div>
                         <div className="md:col-span-2 flex justify-end">
-                            <button type="submit" className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-medium">
+                            <button type="submit" className="btn-primary">
                                 Planı Kaydet
                             </button>
                         </div>
@@ -584,39 +851,81 @@ export default function ProductionModule({ session, onRefresh, productions, reci
 
             {/* COMPLETION FORM */}
             {viewMode === 'complete' && selectedProduction && (
-                <div className="bg-white p-6 rounded-xl shadow-lg border border-slate-200">
-                    <div className="mb-6 bg-indigo-50 p-4 rounded-lg">
-                        <h3 className="font-bold text-indigo-800">Üretim Tamamlama: {selectedProduction.lot_number}</h3>
-                        <p className="text-sm text-indigo-600">Hedef: {selectedProduction.quantity} kg</p>
+                <div className="card-industrial p-6 mb-6">
+                    <div className="mb-6 bg-[#e8f2ff] p-4 rounded-[6px] border border-[#d0e6ff] flex items-start gap-3">
+                        <AlertCircle className="h-5 w-5 text-[#0071e3] mt-0.5" />
+                        <div>
+                            <h3 className="font-bold text-[#0071e3] text-sm">Üretim Tamamlama: {selectedProduction.lot_number}</h3>
+                            <p className="text-xs text-[#0071e3] mt-1">Maliyetler ürün kartındaki referans değerlerden otomatik doldurulmuştur.</p>
+                        </div>
                     </div>
 
-                    <form onSubmit={handleCompleteSubmit} className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <form onSubmit={handleCompleteSubmit} className="space-y-6">
+                        <div className="card-industrial p-6 grid grid-cols-1 md:grid-cols-2 gap-6 bg-[#f5f5f7] border border-slate-200">
+                            <div className="space-y-1">
+                                <label className="label-industrial">Ambalaj Seçimi</label>
+                                <select
+                                    required
+                                    className="select-industrial bg-white"
+                                    value={completeForm.packagingId}
+                                    onChange={e => setCompleteForm({ ...completeForm, packagingId: e.target.value })}
+                                >
+                                    <option value="">Seçiniz...</option>
+                                    {inventory.filter(i => i.type === 'Ambalaj').map(i => (
+                                        <option key={i.id} value={i.id}>{i.name} ({i.stock_qty} adet)</option>
+                                    ))}
+                                </select>
+                            </div>
 
+                            <div className="space-y-1">
+                                <label className="label-industrial">Ambalaj Adedi</label>
+                                <input
+                                    required
+                                    type="number"
+                                    className="input-industrial bg-white"
+                                    value={completeForm.packagingCount}
+                                    onChange={e => setCompleteForm({ ...completeForm, packagingCount: e.target.value })}
+                                />
+                            </div>
 
-                        <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Ambalaj</label>
-                            <select
-                                required
-                                value={completeForm.packagingId}
-                                onChange={e => setCompleteForm({ ...completeForm, packagingId: e.target.value })}
-                                className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
-                            >
-                                <option value="">Seçiniz...</option>
-                                {inventory.filter(i => i.type === 'Ambalaj').map(i => (
-                                    <option key={i.id} value={i.id}>{i.product_code || i.id} - {i.name}</option>
-                                ))}
-                            </select>
+                            <div className="space-y-1">
+                                <label className="label-industrial">Kalite Onay Durumu</label>
+                                <select
+                                    required
+                                    value={completeForm.qcStatus}
+                                    onChange={e => setCompleteForm({ ...completeForm, qcStatus: e.target.value })}
+                                    className="select-industrial bg-white"
+                                >
+                                    <option value="Pass">✓ ONAYLANDI (PASS)</option>
+                                    <option value="Fail">✗ RED EDİLDİ (FAIL)</option>
+                                    <option value="Conditional">⚠ ŞARTLI ONAY (CONDITIONAL)</option>
+                                </select>
+                            </div>
+
+                            <div className="space-y-1">
+                                <label className="label-industrial">Kalite Notları</label>
+                                <textarea
+                                    value={completeForm.qcNotes}
+                                    onChange={e => setCompleteForm({ ...completeForm, qcNotes: e.target.value })}
+                                    className="input-industrial h-[46px] resize-none bg-white"
+                                />
+                            </div>
                         </div>
-                        <input type="hidden" value={completeForm.shippingCost} />
-                        <input type="hidden" value={completeForm.overheadCost} />
-                        <input type="hidden" value={completeForm.saleTermDays} />
-                        <input type="hidden" value={completeForm.profitMarginPercent} />
-                        <input type="hidden" value={completeForm.interestRate} />
-                        <input type="hidden" value={completeForm.currency} />
 
-                        <div className="md:col-span-3 flex justify-end gap-2 mt-4">
-                            <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg font-medium flex items-center gap-2">
-                                <CheckCircle className="h-5 w-5" /> Üretimi Tamamla & Stoka Al
+
+                        <div className="flex justify-end gap-3 pt-4">
+                            <button
+                                type="button"
+                                onClick={() => setViewMode('list')}
+                                className="px-6 py-3 text-slate-500 hover:bg-slate-100 rounded-xl font-bold transition-colors"
+                            >
+                                Vazgeç
+                            </button>
+                            <button
+                                type="submit"
+                                className="bg-green-600 hover:bg-green-700 text-white px-10 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-green-100 transition-all active:scale-95"
+                            >
+                                <CheckCircle className="h-6 w-6" /> Üretimi Onayla & Stoka Al
                             </button>
                         </div>
                     </form>
@@ -624,164 +933,256 @@ export default function ProductionModule({ session, onRefresh, productions, reci
             )}
 
             {/* LIST */}
-            <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
+            {/* Production List Table */}
+            <div className="card-industrial overflow-hidden">
                 <div className="overflow-x-auto">
-                    <table className="w-full">
-                        <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-semibold">
+                    <table className="table-industrial">
+                        <thead>
                             <tr>
-                                <th className="px-6 py-3 text-left">Durum</th>
-                                <th className="px-6 py-3 text-left">Tarih / LOT</th>
-                                <th className="px-6 py-3 text-left">Ürün</th>    {/* Split Column */}
-                                <th className="px-6 py-3 text-left">Müşteri</th> {/* Split Column */}
-                                <th className="px-6 py-3 text-right">Miktar</th>
-                                <th className="px-6 py-3 text-left">KK</th>
-                                <th className="px-6 py-3 text-right">İşlem</th>
+                                <th className="text-left whitespace-nowrap uppercase text-[10px] tracking-widest text-slate-400">Tarih</th>
+                                <th className="text-left uppercase text-[10px] tracking-widest text-slate-400">Durum</th>
+                                <th className="text-left w-1/4 uppercase text-[10px] tracking-widest text-slate-400">Ürün Adı</th>
+                                <th className="text-left uppercase text-[10px] tracking-widest text-slate-400">Ürün Kodu</th>
+                                <th className="text-left uppercase text-[10px] tracking-widest text-slate-400">Müşteri</th>
+                                <th className="text-left uppercase text-[10px] tracking-widest text-slate-400">LOT NO</th>
+                                <th className="text-right uppercase text-[10px] tracking-widest text-slate-400">Miktar</th>
+                                <th className="text-right uppercase text-[10px] tracking-widest text-slate-400">Ambalaj</th>
+                                <th className="text-right uppercase text-[10px] tracking-widest text-slate-400">Birim Maliyet</th>
+                                <th className="text-right uppercase text-[10px] tracking-widest text-slate-400">Toplam Maliyet</th>
+                                <th className="text-right uppercase text-[10px] tracking-widest text-slate-400">İşlem</th>
                             </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-200">
+                        <tbody>
                             {filteredProductions.map(p => {
                                 const recipe = recipes.find(r => r.id === p.recipe_id);
                                 const product = recipe ? inventory.find(i => i.id === recipe.product_id) : null;
-                                const isPlanned = p.status === 'Planned' || p.status === 'In QC';
                                 const customer = customers.find(c => c.id === p.customer_id);
 
                                 return (
-                                    <tr key={p.id} className="hover:bg-slate-50 transition-colors">
-                                        <td className="px-6 py-4">
-                                            <span className={`px-2 py-1 rounded-full text-xs font-bold ${isPlanned ? 'bg-yellow-100 text-yellow-700' : 'bg-green-100 text-green-700'}`}>
-                                                {isPlanned ? 'Planlandı' : 'Tamamlandı'}
-                                            </span>
-                                        </td>
-                                        <td className="px-6 py-4 text-sm text-slate-600">
-                                            <div>{new Date(p.production_date).toLocaleDateString('tr-TR')}</div>
-                                            <div className="text-xs font-mono text-indigo-600">{p.lot_number}</div>
-                                        </td>
-
-                                        {/* Product Column */}
-                                        <td className="px-6 py-4 font-medium text-slate-800">
-                                            <div className="flex items-center gap-2">
-                                                <span className="text-xs text-slate-400 font-mono">{product?.product_code || product?.id}</span>
-                                                <span className="truncate max-w-[150px]" title={product?.name}>{product?.name || '-'}</span>
+                                    <tr key={p.id} className="hover:bg-[#fbfbfd] transition-colors">
+                                        <td className="px-4 py-4 align-middle">
+                                            <div className="font-mono text-xs text-gray-900 bg-white border border-slate-200 px-2 py-1 rounded shadow-sm w-fit">
+                                                {formatDate(p.production_date)}
                                             </div>
                                         </td>
-
-                                        {/* Customer Column */}
-                                        <td className="px-6 py-4">
+                                        <td className="align-middle">
+                                            <div className="flex flex-col gap-1">
+                                                <span className={`inline-flex px-2 py-0.5 rounded-[3px] text-[10px] font-bold uppercase border w-fit ${p.status === 'Completed' ? 'bg-green-50 text-green-700 border-green-100' :
+                                                    p.status === 'Planned' ? 'bg-blue-50 text-blue-700 border-blue-100' :
+                                                        'bg-yellow-50 text-yellow-700 border-yellow-100'
+                                                    }`}>
+                                                    {p.status === 'Completed' ? 'Tamamlandı' : p.status === 'Planned' ? 'Planlandı' : p.status}
+                                                </span>
+                                                {p.qc_status && (
+                                                    <div className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-[3px] border w-fit ${p.qc_status === 'Approved' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
+                                                        p.qc_status === 'Rejected' ? 'bg-red-50 text-red-700 border-red-100' : 'bg-orange-50 text-orange-700 border-orange-100'
+                                                        }`}>
+                                                        QC: {p.qc_status}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </td>
+                                        <td className="align-middle">
+                                            <div className="font-bold text-slate-900">{product?.name || 'Bilinmeyen Ürün'}</div>
+                                        </td>
+                                        <td className="align-middle">
+                                            <div className="text-[11px] text-indigo-600 font-mono font-bold bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100 w-fit">
+                                                {product?.product_code || '-'}
+                                            </div>
+                                        </td>
+                                        <td className="align-middle">
                                             {customer ? (
-                                                <div className="text-xs text-orange-600 flex items-center gap-1 font-bold">
-                                                    <FileText size={12} /> {customer.name}
+                                                <div className="text-xs text-slate-700 font-medium flex items-center gap-1.5">
+                                                    <div className="w-1.5 h-1.5 rounded-full bg-blue-500"></div>
+                                                    {customer.name}
                                                 </div>
                                             ) : (
-                                                <span className="text-slate-300 text-xs italic">Stok</span>
+                                                <div className="text-xs text-slate-400 italic">STANDART STOK</div>
                                             )}
                                         </td>
-
-                                        <td className="px-6 py-4 text-right font-medium">
-                                            {p.quantity} kg
-                                        </td>
-                                        <td className="px-6 py-4 text-sm">
-                                            {p.qc_status && (
-                                                <span className={`flex items-center gap-1 ${p.qc_status === 'Pass' ? 'text-green-600' : 'text-red-600'}`}>
-                                                    {p.qc_status === 'Pass' ? <CheckCircle className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
-                                                    {p.qc_status}
-                                                </span>
+                                        <td className="align-middle">
+                                            {p.lot_number ? (
+                                                <div className="font-mono text-xs font-bold text-slate-700 bg-slate-100 px-2 py-1 rounded border border-slate-200 w-fit">
+                                                    {p.lot_number}
+                                                </div>
+                                            ) : (
+                                                <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Beklemede</div>
                                             )}
                                         </td>
-                                        <td className="px-6 py-4 text-right flex justify-end gap-2">
-                                            {isPlanned && (
-                                                <>
-                                                    <button
-                                                        onClick={() => handlePrintWorkOrder(p)}
-                                                        className="p-2 text-slate-600 hover:bg-slate-100 rounded-lg"
-                                                        title="İş Emri Yazdır"
-                                                    >
-                                                        <Printer className="h-4 w-4" />
-                                                    </button>
-
-                                                    {/* ACTION BUTTONS LOGIC */}
-                                                    {p.qc_status === 'Rejected' || p.qc_status === 'Fail' ? (
-                                                        <div className="flex items-center gap-1">
-                                                            <span className="p-2 text-red-600 bg-red-50 rounded-lg text-xs font-bold flex items-center gap-1" title="Laboratuvar RED verdi">
-                                                                <XCircle className="h-4 w-4" /> RED
-                                                            </span>
-                                                            <button
-                                                                onClick={() => handlePrintRevisionOrder(p)}
-                                                                className="p-2 text-orange-600 hover:bg-orange-50 rounded-lg"
-                                                                title="Düzeltme Föyü Yazdır"
-                                                            >
-                                                                <FileText className="h-4 w-4" />
-                                                            </button>
-                                                            <button
-                                                                onClick={() => { setSelectedAdjProd(p); setShowAdjModal(true); }}
-                                                                className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg"
-                                                                title="Ek Sarfiyat Ekle (Stoktan Düş)"
-                                                            >
-                                                                <Plus className="h-4 w-4" />
-                                                            </button>
-                                                            <button
-                                                                onClick={async () => {
-                                                                    if (!window.confirm('Bu üretimi revize etmek (başa almak) istiyor musunuz?')) return;
-                                                                    const { error } = await supabase.from('productions').update({ status: 'Planned', qc_status: null, lot_number: null }).eq('id', p.id);
-                                                                    if (!error) { alert('Üretim tekrar Planlandı statüsüne alındı.'); if (onRefresh) onRefresh(); }
-                                                                }}
-                                                                className="p-2 text-slate-500 hover:bg-slate-100 rounded-lg"
-                                                                title="Revize Et (Başa Al)"
-                                                            >
-                                                                <RefreshCw className="h-4 w-4" />
-                                                            </button>
-                                                        </div>
-                                                    ) : p.qc_status === 'Approved' ? (
-                                                        <button
-                                                            onClick={() => handleCompleteClick(p)}
-                                                            className="p-2 text-white bg-green-600 hover:bg-green-700 rounded-lg shadow-sm animate-pulse"
-                                                            title="Üretimi Tamamla (Onaylı)"
-                                                        >
-                                                            <CheckCircle className="h-4 w-4" />
-                                                        </button>
-                                                    ) : p.status === 'In QC' ? (
-                                                        <span className="p-2 text-orange-600 bg-orange-50 rounded-lg text-xs font-bold flex items-center gap-1 cursor-help" title="Laboratuvar onayı bekleniyor">
-                                                            <Beaker className="h-4 w-4" /> Testte
+                                        <td className="text-right align-middle">
+                                            <div className="font-black text-slate-900 text-sm">{p.quantity} <span className="text-[10px] text-slate-400 font-bold">KG</span></div>
+                                        </td>
+                                        <td className="text-right align-middle">
+                                            {p.target_package_count && (
+                                                <div className="flex flex-col items-end">
+                                                    <div className="text-[11px] font-bold text-slate-700">{p.target_package_count} ADET</div>
+                                                    <div className="text-[10px] text-slate-400 font-mono">
+                                                        {inventory.find(i => i.id === parseInt(p.target_packaging_id))?.capacity_value || '?'} kg/dolum
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </td>
+                                        <td className="text-right align-middle">
+                                            <div className="text-xs font-mono font-bold text-slate-600">
+                                                {p.calculated_unit_cost ? formatMoney(p.calculated_unit_cost) : '-'}
+                                            </div>
+                                        </td>
+                                        <td className="text-right align-middle">
+                                            <div className="text-sm font-black text-indigo-600 bg-indigo-50/50 px-2 py-1 rounded-sm border border-indigo-100/50">
+                                                {p.calculated_total_cost ? formatMoney(p.calculated_total_cost) : '-'}
+                                            </div>
+                                        </td>
+                                        <td className="text-right align-middle">
+                                            <div className="flex flex-col gap-1 items-end">
+                                                {/* ACTION BUTTONS LOGIC */}
+                                                {p.status === 'Completed' ? (
+                                                    <span className="p-1.5 px-3 text-[#107c10] bg-[#f2f9f2] rounded text-[10px] font-black border border-[#d2e7d2] flex items-center gap-1 uppercase tracking-wider shadow-sm">
+                                                        <CheckCircle className="h-4 w-4" /> TAMAMLANDI
+                                                    </span>
+                                                ) : p.qc_status === 'Rejected' || p.qc_status === 'Fail' ? (
+                                                    <div className="flex items-center gap-1">
+                                                        <span className="p-1 text-red-600 bg-red-50 rounded text-[10px] font-bold border border-red-100 flex items-center gap-1" title="Laboratuvar RED verdi">
+                                                            <XCircle className="h-3 w-3" /> RED
                                                         </span>
-                                                    ) : (
+                                                        <button
+                                                            onClick={() => handlePrintRevisionOrder(p)}
+                                                            className="p-1.5 text-orange-600 hover:bg-orange-50 rounded border border-transparent hover:border-orange-100 transition-colors"
+                                                            title="Düzeltme Föyü Yazdır"
+                                                        >
+                                                            <FileText className="h-4 w-4" />
+                                                        </button>
+                                                        <button
+                                                            onClick={() => { setSelectedAdjProd(p); setShowAdjModal(true); }}
+                                                            className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded border border-transparent hover:border-indigo-100 transition-colors"
+                                                            title="Ek Sarfiyat Ekle (Stoktan Düş)"
+                                                        >
+                                                            <Plus className="h-4 w-4" />
+                                                        </button>
                                                         <button
                                                             onClick={async () => {
-                                                                if (!window.confirm('Bu üretim için Kalite Kontrol testi başlatılsın mı?')) return;
+                                                                const reason = window.prompt('Bu üretim için DÜZELTME SONRASI yeniden test başlatılsın mı? Lütfen yapılan işlemi kısaca belirtiniz:', 'Hammadde takviyesi / Seyreltme yapıldı');
+                                                                if (reason === null) return;
                                                                 try {
                                                                     const { error } = await supabase.rpc('send_production_to_qc', {
                                                                         p_production_id: p.id,
-                                                                        p_user_id: session.user.id
+                                                                        p_user_id: session.user.id,
+                                                                        p_notes: reason
                                                                     });
                                                                     if (error) throw error;
-                                                                    alert('Test talebi Kalite Kontrol birimine iletildi.');
+                                                                    alert('Yeniden test talebi iletildi. Üretim "In QC" durumuna getirildi.');
                                                                     if (onRefresh) onRefresh();
                                                                 } catch (err) {
                                                                     alert('Hata: ' + err.message);
                                                                 }
                                                             }}
-                                                            className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg"
-                                                            title="Test İste (Kalite Kontrol)"
+                                                            className="p-1.5 text-blue-600 hover:bg-blue-50 rounded border border-transparent hover:border-blue-100 transition-colors"
+                                                            title="Düzeltildi, Yeniden Test İste"
                                                         >
                                                             <Beaker className="h-4 w-4" />
                                                         </button>
-                                                    )}
+                                                        <button
+                                                            onClick={async () => {
+                                                                if (!window.confirm('Bu üretimi tamamen SIFIRLAMAK (Planlandı durumuna geri çekmek) istiyor musunuz? LOT numarası silinecektir.')) return;
+                                                                const { error } = await supabase.from('productions').update({ status: 'Planned', qc_status: null, lot_number: null }).eq('id', p.id);
+                                                                if (!error) { alert('Üretim sıfırlandı ve Planlandı statüsüne alındı.'); if (onRefresh) onRefresh(); }
+                                                            }}
+                                                            className="p-1.5 text-slate-400 hover:bg-slate-100 rounded border border-transparent hover:border-slate-200 transition-colors"
+                                                            title="Üretimi Sıfırla (Başa Al)"
+                                                        >
+                                                            <RefreshCw className="h-4 w-4" />
+                                                        </button>
+                                                    </div>
+                                                ) : p.qc_status === 'Approved' ? (
+                                                    <div className="flex items-center gap-1">
+                                                        <button
+                                                            onClick={() => handleCompleteClick(p)}
+                                                            className="p-1.5 text-white bg-green-600 hover:bg-green-700 rounded shadow-sm hover:shadow transition-all w-fit"
+                                                            title="Üretimi Tamamla (Onaylı)"
+                                                        >
+                                                            <CheckCircle className="h-4 w-4" />
+                                                        </button>
+                                                        <button
+                                                            onClick={async () => {
+                                                                const reason = window.prompt('Bu üretim için YENİDEN Kalite Kontrol testi başlatılsın mı? Lütfen yeniden test isteme nedenini belirtiniz:', 'Numune doğrulaması / Müşteri talebi');
+                                                                if (reason === null) return;
+                                                                try {
+                                                                    const { error } = await supabase.rpc('send_production_to_qc', {
+                                                                        p_production_id: p.id,
+                                                                        p_user_id: session.user.id,
+                                                                        p_notes: reason
+                                                                    });
+                                                                    if (error) throw error;
+                                                                    alert('Yeni test talebi iletildi.');
+                                                                    if (onRefresh) onRefresh();
+                                                                } catch (err) {
+                                                                    alert('Hata: ' + err.message);
+                                                                }
+                                                            }}
+                                                            className="p-1.5 text-orange-600 hover:bg-orange-50 rounded border border-transparent hover:border-orange-100 transition-colors"
+                                                            title="Yeniden Test İste"
+                                                        >
+                                                            <Beaker className="h-4 w-4" />
+                                                        </button>
+                                                    </div>
+                                                ) : p.status === 'In QC' ? (
+                                                    <span className="p-1 text-orange-600 bg-orange-50 rounded text-[10px] font-bold border border-orange-100 flex items-center gap-1 cursor-help" title="Laboratuvar onayı bekleniyor">
+                                                        <Beaker className="h-3 w-3" /> Testte
+                                                    </span>
+                                                ) : (
+                                                    <button
+                                                        onClick={async () => {
+                                                            if (!window.confirm('Bu üretim için Kalite Kontrol testi başlatılsın mı?')) return;
+                                                            try {
+                                                                const { error } = await supabase.rpc('send_production_to_qc', {
+                                                                    p_production_id: p.id,
+                                                                    p_user_id: session.user.id
+                                                                });
+                                                                if (error) throw error;
+                                                                alert('Test talebi Kalite Kontrol birimine iletildi.');
+                                                                if (onRefresh) onRefresh();
+                                                            } catch (err) {
+                                                                alert('Hata: ' + err.message);
+                                                            }
+                                                        }}
+                                                        className="p-1.5 text-blue-600 hover:bg-blue-50 rounded border border-transparent hover:border-blue-100 transition-colors"
+                                                        title="Test İste (Kalite Kontrol)"
+                                                    >
+                                                        <Beaker className="h-4 w-4" />
+                                                    </button>
+                                                )}
 
-                                                </>
-                                            )}
-                                            <button
-                                                onClick={() => onDelete(p.id)}
-                                                className="p-2 text-red-600 hover:bg-red-50 rounded-lg"
-                                                title="Sil"
-                                            >
-                                                <Trash2 className="h-4 w-4" />
-                                            </button>
+                                                <div className="flex gap-1 mt-1">
+                                                    <button
+                                                        onClick={() => handlePrintWorkOrder(p)}
+                                                        className="p-1.5 text-gray-500 hover:text-indigo-600 transition-colors"
+                                                        title="Üretim Föyü (İş Emri) Yazdır"
+                                                    >
+                                                        <FileText className="h-4 w-4" />
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handlePrintLabel(p)}
+                                                        className="p-1.5 text-gray-500 hover:text-indigo-600 transition-colors"
+                                                        title="Ürün Etiketi Yazdır"
+                                                    >
+                                                        <Printer className="h-4 w-4" />
+                                                    </button>
+                                                    <button
+                                                        onClick={() => onDelete(p.id)}
+                                                        className="p-1.5 text-gray-500 hover:text-red-600 transition-colors"
+                                                        title="Sil"
+                                                    >
+                                                        <Trash2 className="h-4 w-4" />
+                                                    </button>
+                                                </div>
+                                            </div>
                                         </td>
                                     </tr>
                                 );
                             })}
                             {filteredProductions.length === 0 && (
                                 <tr>
-                                    <td colSpan="7" className="px-6 py-8 text-center text-slate-400">
-                                        Kriterlere uygun kayıt bulunamadı.
+                                    <td colSpan="7" className="px-6 py-8 text-center text-slate-400 italic text-xs">
+                                        Kriterlere uygun üretim kaydı bulunamadı.
                                     </td>
                                 </tr>
                             )}
@@ -791,64 +1192,65 @@ export default function ProductionModule({ session, onRefresh, productions, reci
             </div>
             {/* ADJUSTMENT MODAL */}
             {showAdjModal && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6">
-                        <div className="flex justify-between items-center mb-6 border-b pb-4">
-                            <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                                <Plus className="text-indigo-600" /> Ek Sarfiyat Ekle
+                <div className="modal-overlay-industrial flex items-center justify-center p-4">
+                    <div className="modal-content-industrial w-full max-w-md">
+                        <div className="modal-header-industrial">
+                            <h3 className="text-sm font-bold text-[#1d1d1f] uppercase tracking-wide flex items-center gap-2">
+                                <Plus className="h-4 w-4 text-[#0071e3]" /> Ek Sarfiyat Ekle
                             </h3>
-                            <button onClick={() => setShowAdjModal(false)} className="text-slate-400 hover:text-slate-600">
-                                <X size={24} />
+                            <button onClick={() => setShowAdjModal(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
+                                <X size={20} />
                             </button>
                         </div>
 
-                        <form onSubmit={handleAdjSubmit} className="space-y-4">
-                            <div className="p-4 bg-yellow-50 rounded-lg border border-yellow-100 text-sm text-yellow-800 mb-4">
-                                <p className="font-bold flex items-center gap-1"><AlertTriangle size={14} /> Dikkat:</p>
-                                <p>Bu işlem stoğu hemen düşer ve maliyeti üretime yansıtır.</p>
-                            </div>
+                        <form onSubmit={handleAdjSubmit}>
+                            <div className="modal-body-industrial">
+                                <div className="p-3 bg-yellow-50 rounded-[4px] border border-yellow-100 text-xs text-yellow-800 mb-4">
+                                    <p className="font-bold flex items-center gap-1"><AlertTriangle size={12} /> Dikkat:</p>
+                                    <p>Bu işlem stoğu hemen düşer ve maliyeti üretime yansıtır.</p>
+                                </div>
 
-                            <div>
-                                <label className="block text-sm font-bold text-slate-700 mb-1">Eklenecek Malzeme</label>
-                                <select
-                                    required
-                                    className="w-full p-3 border border-slate-300 rounded-lg focus:outline-none focus:border-indigo-500"
-                                    value={adjForm.itemId}
-                                    onChange={e => setAdjForm({ ...adjForm, itemId: e.target.value })}
-                                >
-                                    <option value="">Seçiniz...</option>
-                                    {inventory.filter(i => i.type === 'Hammadde').map(i => (
-                                        <option key={i.id} value={i.id}>{i.product_code} - {i.name} (Stok: {i.stock_qty || '-'} {i.unit})</option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            <div>
-                                <label className="block text-sm font-bold text-slate-700 mb-1">Miktar</label>
-                                <div className="flex gap-2">
-                                    <input
+                                <div>
+                                    <label className="label-industrial block">Eklenecek Malzeme</label>
+                                    <select
                                         required
-                                        type="number"
-                                        step="0.001"
-                                        className="w-full p-3 border border-slate-300 rounded-lg focus:outline-none focus:border-indigo-500"
-                                        value={adjForm.quantity}
-                                        onChange={e => setAdjForm({ ...adjForm, quantity: e.target.value })}
-                                        placeholder="0.000"
-                                    />
+                                        className="select-industrial"
+                                        value={adjForm.itemId}
+                                        onChange={e => setAdjForm({ ...adjForm, itemId: e.target.value })}
+                                    >
+                                        <option value="">Seçiniz...</option>
+                                        {inventory.filter(i => i.type === 'Hammadde').map(i => (
+                                            <option key={i.id} value={i.id}>{i.product_code} - {i.name} (Stok: {i.stock_qty || '-'} {i.unit})</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label className="label-industrial block">Miktar</label>
+                                    <div className="flex gap-2">
+                                        <input
+                                            required
+                                            type="number"
+                                            step="0.001"
+                                            className="input-industrial"
+                                            value={adjForm.quantity}
+                                            onChange={e => setAdjForm({ ...adjForm, quantity: e.target.value })}
+                                            placeholder="0.000"
+                                        />
+                                    </div>
                                 </div>
                             </div>
-
-                            <div className="pt-4 flex justify-end gap-3">
+                            <div className="modal-footer-industrial">
                                 <button
                                     type="button"
                                     onClick={() => setShowAdjModal(false)}
-                                    className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-medium"
+                                    className="btn-secondary"
                                 >
                                     İptal
                                 </button>
                                 <button
                                     type="submit"
-                                    className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-bold shadow transition-colors"
+                                    className="btn-primary"
                                 >
                                     Ekle ve Stoktan Düş
                                 </button>

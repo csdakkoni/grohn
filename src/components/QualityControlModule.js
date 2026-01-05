@@ -4,9 +4,10 @@ import { ClipboardCheck, Plus, Save, FileText, CheckCircle, XCircle, Search, Bea
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { preparePDFWithFont } from '../utils/exportUtils';
+import { drawCIHeader, drawCIFooter, drawCIMetadataGrid, drawCIWrappedText, CI_PALETTE } from '../utils/pdfCIUtils';
 
-export default function QualityControlModule({ inventory, onRefresh }) {
-    const [activeTab, setActiveTab] = useState('specs'); // 'specs', 'library', 'pending', 'input', 'certs'
+export default function QualityControlModule({ inventory, globalSettings = {}, onRefresh }) {
+    const [activeTab, setActiveTab] = useState('pending'); // 'pending', 'input', 'certs', 'specs', 'library'
 
     const [specs, setSpecs] = useState([]);
     const [standards, setStandards] = useState([]); // Master Library
@@ -18,6 +19,7 @@ export default function QualityControlModule({ inventory, onRefresh }) {
     const [selectedProductForSpec, setSelectedProductForSpec] = useState('');
     const [selectedStandardId, setSelectedStandardId] = useState(''); // For dropdown
     const [newSpec, setNewSpec] = useState({ parameter_name: '', min_value: '', max_value: '', unit: '', method: '' });
+    const [editingSpecId, setEditingSpecId] = useState(null);
 
     // -- STATE FOR STANDARDS LIBRARY --
     const [newStandard, setNewStandard] = useState({ id: null, name: '', unit: '', method: '' }); // Added id
@@ -26,6 +28,10 @@ export default function QualityControlModule({ inventory, onRefresh }) {
     const [selectedBatchId, setSelectedBatchId] = useState(null);
     const [inputValues, setInputValues] = useState({}); // { specId: value }
     const [adjustmentNote, setAdjustmentNote] = useState(''); // [NEW] For rejected batches
+
+    // -- STATE FOR MANUAL BATCH MODAL --
+    const [showManualModal, setShowManualModal] = useState(false);
+    const [manualForm, setManualForm] = useState({ productId: '', lotNo: '' });
 
     // Fetch Data
     const fetchData = useCallback(async () => {
@@ -94,26 +100,16 @@ export default function QualityControlModule({ inventory, onRefresh }) {
         if (!newStandard.name) return alert('Lütfen standart adını giriniz.');
 
         try {
-            if (newStandard.id) {
-                // UPDATE
-                const { error } = await supabase.from('quality_standards').update({
-                    name: newStandard.name,
-                    unit: newStandard.unit,
-                    method: newStandard.method
-                }).eq('id', newStandard.id);
+            // UPSERT with onConflict: 'name' to handle existing names in library
+            const { error } = await supabase.from('quality_standards').upsert({
+                ...(newStandard.id ? { id: newStandard.id } : {}),
+                name: newStandard.name,
+                unit: newStandard.unit,
+                method: newStandard.method
+            }, { onConflict: 'name' });
 
-                if (error) throw error;
-                alert('Standart güncellendi.');
-            } else {
-                // INSERT
-                const { error } = await supabase.from('quality_standards').insert({
-                    name: newStandard.name,
-                    unit: newStandard.unit,
-                    method: newStandard.method
-                });
-                if (error) throw error;
-                alert('Standart eklendi.');
-            }
+            if (error) throw error;
+            alert(newStandard.id ? 'Standart güncellendi.' : 'Standart kütüphaneye eklendi/güncellendi.');
 
             setNewStandard({ id: null, name: '', unit: '', method: '' });
             fetchData(); // Reload all to be safe
@@ -142,24 +138,67 @@ export default function QualityControlModule({ inventory, onRefresh }) {
         if (!selectedProductForSpec || !newSpec.parameter_name) return alert('Lütfen ürün ve parametre seçiniz.');
 
         try {
-            const { data, error } = await supabase.from('quality_specs').insert({
-                product_id: parseInt(selectedProductForSpec),
-                parameter_name: newSpec.parameter_name,
-                min_value: parseFloat(newSpec.min_value),
-                max_value: parseFloat(newSpec.max_value),
-                unit: newSpec.unit,
-                method: newSpec.method
-            }).select().single();
+            if (editingSpecId) {
+                // UPDATE
+                const { data, error } = await supabase.from('quality_specs').update({
+                    product_id: parseInt(selectedProductForSpec),
+                    parameter_name: newSpec.parameter_name,
+                    min_value: parseFloat(newSpec.min_value),
+                    max_value: parseFloat(newSpec.max_value),
+                    unit: newSpec.unit,
+                    method: newSpec.method
+                }).eq('id', editingSpecId).select().single();
 
-            if (error) throw error;
+                if (error) throw error;
+                setSpecs(specs.map(s => s.id === editingSpecId ? data : s));
+                alert('Kriter güncellendi.');
+            } else {
+                // INSERT
+                const { data, error } = await supabase.from('quality_specs').insert({
+                    product_id: parseInt(selectedProductForSpec),
+                    parameter_name: newSpec.parameter_name,
+                    min_value: parseFloat(newSpec.min_value),
+                    max_value: parseFloat(newSpec.max_value),
+                    unit: newSpec.unit,
+                    method: newSpec.method
+                }).select().single();
 
-            setSpecs([...specs, data]);
+                if (error) throw error;
+                setSpecs([...specs, data]);
+                alert('Kriter ürüne eklendi.');
+            }
+
             setNewSpec({ parameter_name: '', min_value: '', max_value: '', unit: '', method: '' });
             setSelectedStandardId('');
-            alert('Kriter ürüne eklendi.');
+            setEditingSpecId(null);
         } catch (error) {
-            console.error('Ekleme hatası:', error);
+            console.error('Kriter işlem hatası:', error);
             alert('Hata: ' + error.message);
+        }
+    };
+
+    const handleEditSpec = (spec) => {
+        setEditingSpecId(spec.id);
+        setSelectedProductForSpec(spec.product_id.toString());
+        setNewSpec({
+            parameter_name: spec.parameter_name,
+            min_value: spec.min_value.toString(),
+            max_value: spec.max_value.toString(),
+            unit: spec.unit || '',
+            method: spec.method || ''
+        });
+        const std = standards.find(s => s.name === spec.parameter_name);
+        if (std) setSelectedStandardId(std.id.toString());
+    };
+
+    const handleDeleteSpec = async (id) => {
+        if (!window.confirm('Bu kriteri silmek istediğinize emin misiniz?')) return;
+        try {
+            const { error } = await supabase.from('quality_specs').delete().eq('id', id);
+            if (error) throw error;
+            setSpecs(specs.filter(s => s.id !== id));
+        } catch (error) {
+            alert('Silme hatası: ' + error.message);
         }
     };
 
@@ -180,22 +219,25 @@ export default function QualityControlModule({ inventory, onRefresh }) {
         }
     };
 
-    const handleCreateManualBatch = async () => {
-        // Create a manual batch for testing purposes (e.g. for a random sample)
-        // Ideally prompt user for product
-        const productIdStr = prompt("Test etmek istediğiniz ürünün ID'si nedir? (Listeden bakınız: " + inventory.map(i => i.id + "-" + i.name).join(', ') + ")");
-        if (!productIdStr) return;
-        const productId = parseInt(productIdStr);
-        const product = inventory.find(i => i.id === productId);
-        if (!product) return alert('Geçersiz ürün ID');
+    const handleCreateManualBatch = () => {
+        // Just open the modal
+        setManualForm({
+            productId: '',
+            lotNo: `TEST-${new Date().toISOString().slice(0, 10)}`
+        });
+        setShowManualModal(true);
+    };
 
-        const lotNo = prompt("Lot No giriniz:", `TEST-${new Date().toISOString().slice(0, 10)}`);
-        if (!lotNo) return;
+    const confirmCreateManualBatch = async () => {
+        if (!manualForm.productId || !manualForm.lotNo) {
+            return alert('Lütfen ürün ve Lot numarası seçiniz.');
+        }
 
+        setLoading(true);
         try {
             const { data, error } = await supabase.from('quality_batches').insert({
-                product_id: productId,
-                lot_no: lotNo,
+                product_id: parseInt(manualForm.productId),
+                lot_no: manualForm.lotNo,
                 status: 'Pending',
                 reference_type: 'Manual',
                 notes: 'Manuel oluşturulan test kaydı'
@@ -204,10 +246,14 @@ export default function QualityControlModule({ inventory, onRefresh }) {
             if (error) throw error;
 
             setBatches([data, ...batches]);
-            alert('Parti oluşturuldu!');
+            setShowManualModal(false);
+            alert('Parti başarıyla oluşturuldu!');
         } catch (error) {
             console.error('Parti oluşturma hatası:', error);
             alert('Hata: ' + error.message);
+        } finally {
+            setLoading(true);
+            fetchData(); // Refresh to be safe
         }
     };
 
@@ -293,52 +339,38 @@ export default function QualityControlModule({ inventory, onRefresh }) {
     const generateCoA = async (batch) => {
         const batchResults = results.filter(r => r.batch_id === batch.id);
         const product = inventory.find(i => i.id === batch.product_id);
-        // Find specs to show limits
-        // Note: results table doesn't store limits, specs table does. 
-        // Ideally we should snapshot limits into results or join them.
-        // For MVP, look up from specs (assuming they didn't change drastically)
 
         const doc = await preparePDFWithFont();
         const fontName = doc.activeFont || 'helvetica';
 
-        // Header
-        doc.setFillColor(41, 128, 185);
-        doc.rect(0, 0, 210, 30, 'F');
-        doc.setTextColor(255, 255, 255);
-
-        doc.setFontSize(20);
-        doc.setFont(fontName, 'bold');
-        doc.text('ANALİZ SERTİFİKASI (CoA)', 105, 18, null, null, 'center');
-
-        doc.setFontSize(10);
-        doc.setFont(fontName, 'normal');
-        doc.text('GROHN Kimya A.Ş.', 105, 25, null, null, 'center');
-
-        // Info Block
-        doc.setTextColor(0, 0, 0);
+        // Initial Header (Professional Layout)
+        const docDate = new Date(batch.created_at).toLocaleDateString('tr-TR');
+        drawCIHeader(doc, 'ANALİZ SERTİFİKASI', 'KALİTE KONTROL MERKEZİ', docDate, batch.lot_no);
         const startY = 45;
 
-        doc.setDrawColor(200);
-        doc.line(14, startY - 5, 196, startY - 5);
+        // Unified Metadata Grid (Cleaned)
+        const metaData = [
+            { label: 'ÜRÜN ADI', value: product?.name || '-' },
+            { label: 'ÜRÜN KODU', value: product?.product_code || product?.id?.toString() || '-' }
+        ];
+        let currY = drawCIMetadataGrid(doc, 14, startY, metaData, 2);
+        currY += 5;
 
+        // Status Decision Block (Integrated)
+        const statusX = 14;
+        const statusY = currY;
+
+        doc.setFontSize(7);
         doc.setFont(fontName, 'bold');
-        doc.text('Ürün Adı:', 14, startY);
-        doc.text('Lot Numarası:', 14, startY + 6);
-        doc.text('Test Tarihi:', 14, startY + 12);
+        doc.setTextColor(...CI_PALETTE.neutral_grey);
+        doc.text('KALİTE KARARI', statusX, statusY);
 
-        doc.setFont(fontName, 'normal');
-        doc.text(product ? product.name : '-', 60, startY);
-        doc.text(batch.lot_no || '-', 60, startY + 6);
-        doc.text(new Date(batch.created_at).toLocaleDateString('tr-TR'), 60, startY + 12);
-
-        // Status Box
-        doc.setFont(fontName, 'bold');
-        doc.text('KARAR:', 140, startY);
         doc.setFontSize(14);
-        doc.setTextColor(batch.status === 'Approved' ? 'green' : 'red');
-        doc.text(batch.status === 'Approved' ? 'UYGUNDUR' : 'REDDEDİLDİ', 160, startY);
-        doc.setFontSize(10);
-        doc.setTextColor(0, 0, 0);
+        const isApproved = batch.status === 'Approved';
+        doc.setTextColor(...(isApproved ? CI_PALETTE.success_green : CI_PALETTE.error_red));
+        doc.text(isApproved ? 'UYGUNDUR' : 'UYGUN DEĞİLDİR', statusX, statusY + 8);
+
+        currY += 15;
 
         // Results Table
         const tableBody = batchResults.map(r => {
@@ -356,64 +388,102 @@ export default function QualityControlModule({ inventory, onRefresh }) {
         });
 
         autoTable(doc, {
-            startY: startY + 20,
-            head: [['Parametre', 'Metot', 'Spesifikasyon', 'Ölçülen Değer', 'Sonuç']],
+            startY: currY,
+            head: [['Parametre', 'Metot', 'Spesifikasyon', 'Ölçülen', 'Sonuç']],
             body: tableBody,
             theme: 'grid',
-            headStyles: { fillColor: [41, 128, 185], textColor: 255, font: fontName, fontStyle: 'bold' },
-            bodyStyles: { font: fontName },
+            headStyles: {
+                fillColor: CI_PALETTE.pure_black,
+                textColor: 255,
+                font: fontName,
+                fontStyle: 'bold',
+                fontSize: 7,
+                cellPadding: 3
+            },
+            bodyStyles: {
+                font: fontName,
+                fontSize: 8,
+                cellPadding: 3,
+                textColor: CI_PALETTE.pure_black
+            },
+            columnStyles: {
+                0: { fontStyle: 'bold' },
+                4: { halign: 'center', fontStyle: 'bold' }
+            },
+            margin: { top: 40, bottom: 35 },
+            didDrawPage: (data) => {
+                const docDate = new Date(batch.created_at).toLocaleDateString('tr-TR');
+                drawCIHeader(doc, 'ANALİZ SERTİFİKASI', 'KALİTE KONTROL MERKEZİ', docDate, batch.lot_no);
+                drawCIFooter(doc, globalSettings, 'Kalite Güvence Birimi v5.3.0');
+            }
         });
 
-        // Footer / Signatures
-        const finalY = doc.lastAutoTable.finalY + 30;
+        // High Precision Signatures
+        let finalY = doc.lastAutoTable.finalY + 25;
 
-        doc.setFont(fontName, 'bold');
-        doc.text('Kalite Kontrol Sorumlusu', 40, finalY);
-        doc.text('Onaylayan', 150, finalY);
+        // Space Check
+        if (finalY > 240) {
+            doc.addPage();
+            const docDate = new Date(batch.created_at).toLocaleDateString('tr-TR');
+            drawCIHeader(doc, 'ANALİZ SERTİFİKASI', 'KALİTE KONTROL MERKEZİ', docDate, batch.lot_no);
+            drawCIFooter(doc, globalSettings, 'Kalite Güvence Birimi v5.3.0');
+            finalY = 45;
+        }
 
-        doc.setLineWidth(0.5);
-        doc.line(40, finalY + 15, 90, finalY + 15);
-        doc.line(150, finalY + 15, 200, finalY + 15);
+        if (finalY < 250) {
+            doc.setDrawColor(...CI_PALETTE.hairline_grey);
+            doc.setLineWidth(0.05);
 
-        doc.setFontSize(8);
-        doc.setFont(fontName, 'italic');
-        doc.text('Bu belge elektronik ortamda oluşturulmuştur, ıslak imza gerektirmez.', 105, 280, null, null, 'center');
+            // Left Sig
+            doc.line(14, finalY + 15, 74, finalY + 15);
+            doc.setFontSize(7);
+            doc.setFont(fontName, 'bold');
+            doc.setTextColor(...CI_PALETTE.neutral_grey);
+            doc.text('KALİTE KONTROL SORUMLUSU', 14, finalY);
 
-        doc.save(`CoA_${product?.name || 'Urun'}_${batch.lot_no}.pdf`);
+            // Right Sig (System Seal)
+            doc.line(136, finalY + 15, 196, finalY + 15);
+            doc.text('SİSTEM ONAYI', 136, finalY);
+            doc.setFont(fontName, 'italic');
+            doc.setFontSize(6);
+            doc.text(`Dijital Kimlik: ${batch.id}-${Date.now()}`, 136, finalY + 14);
+        }
+
+        doc.save(`Analiz_Sertifikasi_${product?.name || 'Urun'}_${batch.lot_no}.pdf`);
     };
 
     return (
         <div className="space-y-6 animate-fade-in">
             <div className="flex justify-between items-center">
-                <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-                    <ClipboardCheck className="h-6 w-6 text-blue-600" /> Kalite Kontrol (QC)
+                <h2 className="heading-industrial text-2xl flex items-center gap-2">
+                    <ClipboardCheck className="h-6 w-6 text-[#0071e3]" /> KALİTE KONTROL
                 </h2>
                 <button
                     onClick={fetchData}
-                    className="p-2 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors"
+                    className="p-2 bg-[#f5f5f7] rounded-full hover:bg-[#e5e5ea] transition-colors"
                     title="Yenile"
                 >
-                    <RefreshCw className={`h-5 w-5 text-slate-600 ${loading ? 'animate-spin' : ''}`} />
+                    <RefreshCw className={`h-5 w-5 text-[#86868b] ${loading ? 'animate-spin' : ''}`} />
                 </button>
             </div>
 
             {/* TABS */}
             <div className="flex gap-4 border-b border-slate-200 overflow-x-auto">
                 {[
-                    { id: 'library', label: 'Kütüphane', icon: Book },
-                    { id: 'specs', label: 'Ürün Kriterleri', icon: Settings },
                     { id: 'pending', label: 'Test Bekleyenler', icon: AlertTriangle },
                     { id: 'input', label: 'Test Girişi', icon: Beaker },
-                    { id: 'certs', label: 'Sertifikalar', icon: FileText }
+                    { id: 'certs', label: 'Sertifikalar', icon: FileText },
+                    { id: 'specs', label: 'Ürün Kriterleri', icon: Settings },
+                    { id: 'library', label: 'Kütüphane', icon: Book }
                 ].map(tab => (
                     <button
                         key={tab.id}
                         onClick={() => setActiveTab(tab.id)}
-                        className={`pb-2 px-4 font-medium transition-colors whitespace-nowrap flex items-center gap-2 ${activeTab === tab.id
-                            ? 'text-blue-600 border-b-2 border-blue-600'
-                            : 'text-slate-500 hover:text-slate-700'}`}
+                        className={`pb-2 px-4 font-bold text-[11px] uppercase tracking-wider transition-colors whitespace-nowrap flex items-center gap-2 ${activeTab === tab.id
+                            ? 'text-[#0071e3] border-b-2 border-[#0071e3]'
+                            : 'text-[#86868b] hover:text-[#1d1d1f]'}`}
                     >
-                        <tab.icon size={16} />
+                        <tab.icon size={14} />
                         {tab.label}
                     </button>
                 ))}
@@ -425,33 +495,33 @@ export default function QualityControlModule({ inventory, onRefresh }) {
                 {/* 0. LIBRARY TAB */}
                 {activeTab === 'library' && (
                     <div className="space-y-6">
-                        <div className="bg-indigo-50 p-4 rounded-lg border border-indigo-100">
-                            <h3 className="font-bold text-indigo-700 mb-2 flex items-center gap-2">
-                                <Plus size={16} /> Yeni Standart Tanımla
+                        <div className="bg-[#fbfbfd] p-4 rounded-[6px] border border-[#d2d2d7]">
+                            <h3 className="text-sm font-bold text-[#1d1d1f] mb-3 flex items-center gap-2 uppercase tracking-wide">
+                                <Plus size={16} className="text-[#0071e3]" /> Yeni Standart Tanımla
                             </h3>
                             <div className="flex gap-2 items-end">
                                 <div className="flex-1">
-                                    <label className="text-xs font-bold text-slate-500">Parametre Adı</label>
+                                    <label className="label-industrial block">Parametre Adı</label>
                                     <input
-                                        className="w-full p-2 border rounded"
+                                        className="input-industrial"
                                         placeholder="Örn: pH, Yoğunluk"
                                         value={newStandard.name}
                                         onChange={e => setNewStandard({ ...newStandard, name: e.target.value })}
                                     />
                                 </div>
                                 <div className="w-24">
-                                    <label className="text-xs font-bold text-slate-500">Birim</label>
+                                    <label className="label-industrial block">Birim</label>
                                     <input
-                                        className="w-full p-2 border rounded"
+                                        className="input-industrial"
                                         placeholder="g/cm3"
                                         value={newStandard.unit}
                                         onChange={e => setNewStandard({ ...newStandard, unit: e.target.value })}
                                     />
                                 </div>
                                 <div className="w-32">
-                                    <label className="text-xs font-bold text-slate-500">Metot</label>
+                                    <label className="label-industrial block">Metot</label>
                                     <input
-                                        className="w-full p-2 border rounded"
+                                        className="input-industrial"
                                         placeholder="ASTM..."
                                         value={newStandard.method}
                                         onChange={e => setNewStandard({ ...newStandard, method: e.target.value })}
@@ -459,14 +529,14 @@ export default function QualityControlModule({ inventory, onRefresh }) {
                                 </div>
                                 <button
                                     onClick={handleAddStandard}
-                                    className="bg-indigo-600 text-white px-4 py-2 rounded font-medium hover:bg-indigo-700"
+                                    className="btn-primary"
                                 >
                                     {newStandard.id ? 'Güncelle' : 'Ekle'}
                                 </button>
                                 {newStandard.id && (
                                     <button
                                         onClick={() => setNewStandard({ id: null, name: '', unit: '', method: '' })}
-                                        className="bg-slate-200 text-slate-700 px-4 py-2 rounded font-medium hover:bg-slate-300"
+                                        className="btn-secondary"
                                     >
                                         İptal
                                     </button>
@@ -513,14 +583,14 @@ export default function QualityControlModule({ inventory, onRefresh }) {
                 {/* 1. SPECS TAB */}
                 {activeTab === 'specs' && (
                     <div className="space-y-6">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-lg">
-                            <h3 className="md:col-span-2 font-bold text-slate-700 block border-b pb-2">Ürüne Kriter Ata</h3>
+                        <div className="card-industrial p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <h3 className="md:col-span-2 text-sm font-bold text-[#1d1d1f] uppercase tracking-wide border-b border-[#d2d2d7] pb-2">Ürüne Kriter Ata</h3>
 
                             <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-xs font-bold text-slate-500 mb-1">Ürün</label>
+                                    <label className="label-industrial block">Ürün</label>
                                     <select
-                                        className="w-full p-2 border border-slate-300 rounded focus:border-blue-500 outline-none"
+                                        className="select-industrial"
                                         value={selectedProductForSpec}
                                         onChange={e => setSelectedProductForSpec(e.target.value)}
                                     >
@@ -529,9 +599,9 @@ export default function QualityControlModule({ inventory, onRefresh }) {
                                     </select>
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-bold text-slate-500 mb-1">Kriter (Kütüphaneden)</label>
+                                    <label className="label-industrial block">Kriter (Kütüphaneden)</label>
                                     <select
-                                        className="w-full p-2 border border-slate-300 rounded focus:border-blue-500 outline-none"
+                                        className="select-industrial"
                                         value={selectedStandardId}
                                         onChange={e => handleStandardSelect(e.target.value)}
                                     >
@@ -545,20 +615,20 @@ export default function QualityControlModule({ inventory, onRefresh }) {
                                 <>
                                     <div className="grid grid-cols-2 gap-2">
                                         <div>
-                                            <label className="block text-xs font-bold text-slate-500 mb-1">Min Değer</label>
+                                            <label className="label-industrial block">Min Değer</label>
                                             <input
                                                 type="number"
-                                                className="w-full p-2 border border-slate-300 rounded focus:border-blue-500 outline-none"
+                                                className="input-industrial"
                                                 value={newSpec.min_value}
                                                 onChange={e => setNewSpec({ ...newSpec, min_value: e.target.value })}
                                                 placeholder="Min"
                                             />
                                         </div>
                                         <div>
-                                            <label className="block text-xs font-bold text-slate-500 mb-1">Max Değer</label>
+                                            <label className="label-industrial block">Max Değer</label>
                                             <input
                                                 type="number"
-                                                className="w-full p-2 border border-slate-300 rounded focus:border-blue-500 outline-none"
+                                                className="input-industrial"
                                                 value={newSpec.max_value}
                                                 onChange={e => setNewSpec({ ...newSpec, max_value: e.target.value })}
                                                 placeholder="Max"
@@ -568,31 +638,43 @@ export default function QualityControlModule({ inventory, onRefresh }) {
 
                                     <div className="flex gap-2">
                                         <div className="flex-1">
-                                            <label className="block text-xs font-bold text-slate-500 mb-1">Birim</label>
+                                            <label className="label-industrial block">Birim</label>
                                             <input
                                                 placeholder="Birim"
-                                                className="w-full p-2 border border-slate-300 rounded bg-slate-100"
+                                                className="input-industrial bg-[#f5f5f7] cursor-not-allowed"
                                                 value={newSpec.unit}
                                                 readOnly
                                             />
                                         </div>
                                         <div className="flex-1">
-                                            <label className="block text-xs font-bold text-slate-500 mb-1">Metot</label>
+                                            <label className="label-industrial block">Metot</label>
                                             <input
                                                 placeholder="Metot"
-                                                className="w-full p-2 border border-slate-300 rounded bg-slate-100"
+                                                className="input-industrial bg-[#f5f5f7] cursor-not-allowed"
                                                 value={newSpec.method}
                                                 readOnly
                                             />
                                         </div>
                                     </div>
 
-                                    <div className="md:col-span-2 flex justify-end mt-2">
+                                    <div className="md:col-span-2 flex justify-end gap-2 mt-2">
+                                        {editingSpecId && (
+                                            <button
+                                                onClick={() => {
+                                                    setEditingSpecId(null);
+                                                    setNewSpec({ parameter_name: '', min_value: '', max_value: '', unit: '', method: '' });
+                                                    setSelectedStandardId('');
+                                                }}
+                                                className="btn-secondary"
+                                            >
+                                                İptal
+                                            </button>
+                                        )}
                                         <button
                                             onClick={handleAddSpec}
-                                            className="bg-blue-600 text-white px-6 py-2 rounded shadow hover:bg-blue-700 flex items-center gap-2 transition-colors"
+                                            className="btn-primary flex items-center gap-2"
                                         >
-                                            <Plus size={16} /> Kriteri Kaydet
+                                            <Plus size={16} /> {editingSpecId ? 'Kriteri Güncelle' : 'Kriteri Kaydet'}
                                         </button>
                                     </div>
                                 </>
@@ -600,39 +682,60 @@ export default function QualityControlModule({ inventory, onRefresh }) {
                         </div>
 
                         {/* LIST */}
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-sm text-left border rounded-lg">
-                                <thead className="text-xs text-slate-500 uppercase bg-slate-50 border-b">
-                                    <tr>
-                                        <th className="px-4 py-3">Ürün</th>
-                                        <th className="px-4 py-3">Parametre</th>
-                                        <th className="px-4 py-3">Limitler</th>
-                                        <th className="px-4 py-3">Birim</th>
-                                        <th className="px-4 py-3">Metot</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {specs.length === 0 ? (
-                                        <tr><td colSpan="5" className="text-center py-4 text-slate-400">Kayıtlı kriter yok.</td></tr>
-                                    ) : (
-                                        specs.map(s => {
-                                            const p = inventory.find(i => i.id === s.product_id);
-                                            return (
-                                                <tr key={s.id} className="border-b hover:bg-slate-50">
-                                                    <td className="px-4 py-3 font-medium text-slate-800">
-                                                        <span className="text-xs text-slate-400 font-mono mr-2">{p?.product_code || p?.id}</span>
-                                                        {p ? p.name : '-'}
-                                                    </td>
-                                                    <td className="px-4 py-3">{s.parameter_name}</td>
-                                                    <td className="px-4 py-3 text-slate-600 font-mono">{s.min_value} - {s.max_value}</td>
-                                                    <td className="px-4 py-3">{s.unit}</td>
-                                                    <td className="px-4 py-3 text-slate-500 italic">{s.method}</td>
-                                                </tr>
-                                            );
-                                        })
-                                    )}
-                                </tbody>
-                            </table>
+                        <div className="card-industrial overflow-hidden">
+                            <div className="overflow-x-auto">
+                                <table className="table-industrial">
+                                    <thead>
+                                        <tr>
+                                            <th className="text-left w-1/4">Ürün</th>
+                                            <th className="text-left w-1/4">Parametre</th>
+                                            <th className="text-left w-1/4">Limitler</th>
+                                            <th className="text-left w-1/6">Birim</th>
+                                            <th className="text-left w-1/6">Metot</th>
+                                            <th className="text-right w-12">İşlem</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {specs.length === 0 ? (
+                                            <tr><td colSpan="5" className="px-6 py-8 text-center text-slate-400 italic text-xs">Kayıtlı kriter yok.</td></tr>
+                                        ) : (
+                                            specs.map(s => {
+                                                const p = inventory.find(i => i.id === s.product_id);
+                                                return (
+                                                    <tr key={s.id}>
+                                                        <td>
+                                                            <div className="font-medium text-[#1d1d1f]">{p ? p.name : '-'}</div>
+                                                            <div className="text-[10px] text-gray-400 font-mono mt-0.5">{p?.product_code || p?.id}</div>
+                                                        </td>
+                                                        <td>{s.parameter_name}</td>
+                                                        <td className="font-mono text-gray-600 font-bold">{s.min_value} - {s.max_value}</td>
+                                                        <td className="text-gray-500">{s.unit}</td>
+                                                        <td className="text-gray-400 italic text-[10px]">{s.method}</td>
+                                                        <td className="text-right">
+                                                            <div className="flex justify-end gap-1">
+                                                                <button
+                                                                    onClick={() => handleEditSpec(s)}
+                                                                    className="p-1 text-blue-600 hover:bg-blue-50 rounded"
+                                                                    title="Düzenle"
+                                                                >
+                                                                    <Settings size={14} />
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => handleDeleteSpec(s.id)}
+                                                                    className="p-1 text-red-600 hover:bg-red-50 rounded"
+                                                                    title="Sil"
+                                                                >
+                                                                    <XCircle size={14} />
+                                                                </button>
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
                 )}
@@ -732,10 +835,10 @@ export default function QualityControlModule({ inventory, onRefresh }) {
                                                     </div>
                                                 ) : (
                                                     batchSpecs.map(spec => (
-                                                        <div key={spec.id} className="flex items-center gap-4 p-4 bg-slate-50 rounded-lg border border-slate-200">
+                                                        <div key={spec.id} className="flex items-center gap-4 p-4 bg-white rounded-[6px] border border-[#d2d2d7]">
                                                             <div className="w-1/3">
-                                                                <div className="font-bold text-slate-700">{spec.parameter_name}</div>
-                                                                <div className="text-xs text-slate-500 mt-1">
+                                                                <div className="font-bold text-[#1d1d1f] text-sm">{spec.parameter_name}</div>
+                                                                <div className="text-[10px] text-[#86868b] mt-1 uppercase tracking-wide">
                                                                     Hedef: {spec.min_value} - {spec.max_value} {spec.unit}
                                                                 </div>
                                                             </div>
@@ -744,19 +847,19 @@ export default function QualityControlModule({ inventory, onRefresh }) {
                                                                     type="number"
                                                                     step="0.01"
                                                                     placeholder="Ölçülen Değer"
-                                                                    className="w-full p-2 border border-slate-300 rounded focus:border-blue-500 outline-none text-lg font-mono"
+                                                                    className="input-industrial font-mono text-center text-lg py-2"
                                                                     value={inputValues[spec.id] || ''}
                                                                     onChange={e => setInputValues({ ...inputValues, [spec.id]: e.target.value })}
                                                                 />
                                                             </div>
                                                             <div className="w-1/3 text-right">
                                                                 {inputValues[spec.id] && (
-                                                                    <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm font-bold shadow-sm ${(parseFloat(inputValues[spec.id]) >= spec.min_value && parseFloat(inputValues[spec.id]) <= spec.max_value)
+                                                                    <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold shadow-sm ${(parseFloat(inputValues[spec.id]) >= spec.min_value && parseFloat(inputValues[spec.id]) <= spec.max_value)
                                                                         ? 'bg-green-100 text-green-700 ring-1 ring-green-200' : 'bg-red-100 text-red-700 ring-1 ring-red-200'
                                                                         }`}>
                                                                         {(parseFloat(inputValues[spec.id]) >= spec.min_value && parseFloat(inputValues[spec.id]) <= spec.max_value)
-                                                                            ? <><CheckCircle size={16} /> UYGUN</>
-                                                                            : <><XCircle size={16} /> SAPMA</>
+                                                                            ? <><CheckCircle size={14} /> UYGUN</>
+                                                                            : <><XCircle size={14} /> SAPMA</>
                                                                         }
                                                                     </div>
                                                                 )}
@@ -767,13 +870,13 @@ export default function QualityControlModule({ inventory, onRefresh }) {
                                             </div>
 
                                             {/* REVISION NOTE INPUT */}
-                                            <div className="mt-6 bg-orange-50 p-4 rounded-lg border border-orange-100">
-                                                <h4 className="font-bold text-orange-800 mb-2 flex items-center gap-2">
+                                            <div className="mt-6 bg-[#fff9f0] p-4 rounded-[6px] border border-[#f5d0b0]">
+                                                <h4 className="font-bold text-[#c76a16] mb-2 flex items-center gap-2 text-sm uppercase">
                                                     <AlertTriangle size={16} /> Revizyon / Düzeltme Talimatı (Opsiyonel)
                                                 </h4>
-                                                <p className="text-xs text-orange-600 mb-2">Eğer sonuçlar uygun değilse, üretime iletilecek düzeltme talimatlarını buraya giriniz (Örn: "500g Asetik Asit ekle").</p>
+                                                <p className="text-[10px] text-[#86868b] mb-2">Eğer sonuçlar uygun değilse, üretime iletilecek düzeltme talimatlarını buraya giriniz.</p>
                                                 <textarea
-                                                    className="w-full p-3 border border-orange-200 rounded focus:border-orange-500 outline-none text-sm"
+                                                    className="w-full p-3 border border-[#f5d0b0] rounded-[6px] focus:border-[#c76a16] outline-none text-sm bg-white"
                                                     rows="3"
                                                     placeholder="Düzeltme reçetesi veya notları..."
                                                     value={adjustmentNote}
@@ -781,17 +884,17 @@ export default function QualityControlModule({ inventory, onRefresh }) {
                                                 />
                                             </div>
 
-                                            <div className="flex justify-end gap-3 mt-8 pt-4 border-t border-slate-100">
+                                            <div className="flex justify-end gap-3 mt-8 pt-4 border-t border-[#d2d2d7]">
                                                 <button
                                                     onClick={() => setSelectedBatchId(null)}
-                                                    className="px-6 py-2 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+                                                    className="btn-secondary"
                                                 >
                                                     İptal
                                                 </button>
                                                 <button
                                                     onClick={handleSaveResults}
                                                     disabled={batchSpecs.length === 0}
-                                                    className="bg-green-600 text-white px-8 py-2 rounded-lg shadow-lg hover:bg-green-700 flex items-center gap-2 font-bold transition-transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                    className="btn-primary-green flex items-center gap-2"
                                                 >
                                                     <Save size={18} /> Kaydet ve Onayla
                                                 </button>
@@ -808,53 +911,127 @@ export default function QualityControlModule({ inventory, onRefresh }) {
                 {activeTab === 'certs' && (
                     <div className="space-y-4">
                         <h3 className="font-bold text-slate-700 mb-4 pb-2 border-b">Tamamlanan Analizler & Sertifikalar</h3>
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-sm text-left">
-                                <thead className="text-xs text-slate-500 uppercase bg-slate-50">
-                                    <tr>
-                                        <th className="px-4 py-3">Tarih</th>
-                                        <th className="px-4 py-3">Ürün</th>
-                                        <th className="px-4 py-3">Lot No</th>
-                                        <th className="px-4 py-3">Durum</th>
-                                        <th className="px-4 py-3">İşlem</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {batches.filter(b => b.status !== 'Pending').length === 0 ? (
-                                        <tr><td colSpan="5" className="text-center py-4 text-slate-400">Henüz tamamlanmış analiz yok.</td></tr>
-                                    ) : (
-                                        batches.filter(b => b.status !== 'Pending').map(batch => {
-                                            const prod = inventory.find(i => i.id === batch.product_id);
-                                            return (
-                                                <tr key={batch.id} className="border-b hover:bg-slate-50 transition-colors">
-                                                    <td className="px-4 py-3 whitespace-nowrap">{new Date(batch.created_at).toLocaleDateString('tr-TR')}</td>
-                                                    <td className="px-4 py-3 font-medium text-slate-800">{prod?.name}</td>
-                                                    <td className="px-4 py-3 font-mono text-slate-600">{batch.lot_no}</td>
-                                                    <td className="px-4 py-3">
-                                                        <span className={`px-2 py-1 rounded text-xs font-bold inline-flex items-center gap-1 ${batch.status === 'Approved' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                                                            }`}>
-                                                            {batch.status === 'Approved' ? <CheckCircle size={12} /> : <XCircle size={12} />}
-                                                            {batch.status === 'Approved' ? 'ONAYLI' : 'RED'}
-                                                        </span>
-                                                    </td>
-                                                    <td className="px-4 py-3">
-                                                        <button
-                                                            onClick={() => generateCoA(batch)}
-                                                            className="text-blue-600 hover:text-blue-800 flex items-center gap-1 font-medium transition-colors"
-                                                        >
-                                                            <FileText size={16} /> CoA İndir
-                                                        </button>
-                                                    </td>
-                                                </tr>
-                                            );
-                                        })
-                                    )}
-                                </tbody>
-                            </table>
+                        <div className="card-industrial overflow-hidden">
+                            <div className="overflow-x-auto">
+                                <table className="table-industrial">
+                                    <thead>
+                                        <tr>
+                                            <th className="text-left w-1/6">Tarih</th>
+                                            <th className="text-left w-1/3">Ürün</th>
+                                            <th className="text-left w-1/6">Parti (Lot) No</th>
+                                            <th className="text-left w-1/6">Durum</th>
+                                            <th className="text-right w-1/6">İşlem</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {batches.filter(b => b.status !== 'Pending').length === 0 ? (
+                                            <tr><td colSpan="5" className="px-6 py-8 text-center text-slate-400 italic text-xs">Henüz tamamlanmış analiz yok.</td></tr>
+                                        ) : (
+                                            batches.filter(b => b.status !== 'Pending').map(batch => {
+                                                const prod = inventory.find(i => i.id === batch.product_id);
+                                                return (
+                                                    <tr key={batch.id}>
+                                                        <td className="font-mono text-gray-500 text-xs">{new Date(batch.created_at).toLocaleDateString('tr-TR')}</td>
+                                                        <td className="font-medium text-[#1d1d1f]">{prod?.name || 'Bilinmeyen'}</td>
+                                                        <td>
+                                                            <span className="font-mono text-xs font-medium text-gray-700 bg-gray-50 px-1 py-0.5 rounded border border-gray-100">
+                                                                {batch.lot_no}
+                                                            </span>
+                                                        </td>
+                                                        <td>
+                                                            <span className={`inline-flex px-2 py-0.5 rounded-[3px] text-[10px] font-bold uppercase border ${batch.status === 'Approved' ? 'bg-green-50 text-green-700 border-green-100' : 'bg-red-50 text-red-700 border-red-100'
+                                                                }`}>
+                                                                {batch.status === 'Approved' ? 'QC ONAYLI' : 'RED'}
+                                                            </span>
+                                                        </td>
+                                                        <td className="text-right">
+                                                            <button
+                                                                onClick={() => generateCoA(batch)}
+                                                                className="text-blue-600 hover:text-blue-800 inline-flex items-center gap-1 font-medium text-xs transition-colors"
+                                                            >
+                                                                <FileText size={14} /> CoA İndir
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
                 )}
 
+                {/* MANUAL BATCH MODAL */}
+                {showManualModal && (
+                    <div className="modal-overlay-industrial flex items-center justify-center z-50 p-4">
+                        <div className="modal-content-industrial w-full max-w-md animate-scale-in">
+                            <div className="modal-header-industrial">
+                                <h3 className="font-bold text-[#1d1d1f] flex items-center gap-2 uppercase text-sm tracking-wide">
+                                    <Plus size={16} className="text-[#0071e3]" /> Manuel Parti Oluştur
+                                </h3>
+                                <button onClick={() => setShowManualModal(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
+                                    <XCircle size={20} />
+                                </button>
+                            </div>
+
+                            <div className="modal-body-industrial space-y-4">
+                                <div>
+                                    <label className="label-industrial block">Ürün Seçiniz</label>
+                                    <select
+                                        className="select-industrial"
+                                        value={manualForm.productId}
+                                        onChange={e => setManualForm({ ...manualForm, productId: e.target.value })}
+                                    >
+                                        <option value="">-- Ürün Filtreleniyor --</option>
+                                        {inventory
+                                            .filter(i => specs.some(s => s.product_id === i.id)) // ONLY SHOW PRODUCTS WITH SPECS
+                                            .map(i => (
+                                                <option key={i.id} value={i.id}>
+                                                    {i.name} {i.product_code ? `(${i.product_code})` : ''}
+                                                </option>
+                                            ))
+                                        }
+                                    </select>
+                                    {inventory.filter(i => specs.some(s => s.product_id === i.id)).length === 0 && (
+                                        <p className="text-[10px] text-red-500 mt-1 italic">Henüz hiçbir ürün için test kriteri tanımlanmamış!</p>
+                                    )}
+                                </div>
+
+                                <div>
+                                    <label className="label-industrial block">Lot / Parti Numarası</label>
+                                    <input
+                                        className="input-industrial font-mono"
+                                        value={manualForm.lotNo}
+                                        onChange={e => setManualForm({ ...manualForm, lotNo: e.target.value })}
+                                        placeholder="Örn: BATCH-001"
+                                    />
+                                </div>
+
+                                <div className="bg-[#e8f2ff] p-3 rounded-[6px] border border-[#d0e6ff] italic text-[10px] text-[#0071e3]">
+                                    ℹ️ Sadece kalite kriteri (pH, Yoğunluk vb.) tanımlanmış ürünler listelenmektedir.
+                                </div>
+                            </div>
+
+                            <div className="modal-footer-industrial">
+                                <button
+                                    onClick={() => setShowManualModal(false)}
+                                    className="btn-secondary"
+                                >
+                                    İptal
+                                </button>
+                                <button
+                                    onClick={confirmCreateManualBatch}
+                                    disabled={!manualForm.productId || !manualForm.lotNo}
+                                    className="btn-primary"
+                                >
+                                    Partiyi Oluştur
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );

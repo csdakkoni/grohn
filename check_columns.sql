@@ -1,4 +1,3 @@
-
-SELECT column_name, data_type, is_nullable
-FROM information_schema.columns
-WHERE table_name = 'stock_movements';
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'inventory';

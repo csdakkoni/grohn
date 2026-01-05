@@ -66,39 +66,39 @@ export default function RoleManagementModule({ currentUser }) {
     return (
         <div className="space-y-6">
             <div className="flex justify-between items-center">
-                <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-                    <Users className="h-6 w-6 text-indigo-600" /> Kullanıcı Yönetimi
+                <h2 className="text-sm font-bold text-[#1d1d1f] uppercase tracking-wide">
+                    Takım Üyeleri & Yetkiler
                 </h2>
                 <button
                     onClick={() => setShowForm(true)}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+                    className="btn-primary flex items-center gap-2"
                 >
                     <UserPlus className="h-4 w-4" /> Yeni Kullanıcı Ekle
                 </button>
             </div>
 
             {showForm && (
-                <div className="bg-white p-6 rounded-xl shadow-lg border border-slate-200 animate-in fade-in slide-in-from-top-4">
-                    <h3 className="font-bold text-lg mb-4 text-slate-800">Yeni Kullanıcı Davet Et</h3>
+                <div className="bg-[#fbfbfd] p-6 rounded-[6px] shadow-sm border border-[#d2d2d7] animate-in fade-in slide-in-from-top-4">
+                    <h3 className="font-bold text-lg mb-4 text-[#1d1d1f]">Yeni Kullanıcı Davet Et</h3>
                     <form onSubmit={handleInvite} className="space-y-4">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-1">E-posta Adresi</label>
+                                <label className="label-industrial block">E-posta Adresi</label>
                                 <input
                                     type="email"
                                     required
                                     value={formData.email}
                                     onChange={e => setFormData({ ...formData, email: e.target.value })}
-                                    className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                    className="input-industrial"
                                     placeholder="ornek@sirket.com"
                                 />
                             </div>
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-1">Rol</label>
+                                <label className="label-industrial block">Rol</label>
                                 <select
                                     value={formData.role}
                                     onChange={e => setFormData({ ...formData, role: e.target.value })}
-                                    className="w-full border-2 border-slate-200 rounded-lg p-2 focus:border-indigo-500 focus:outline-none"
+                                    className="select-industrial"
                                 >
                                     <option value="operator">Operatör (Veri Girişi)</option>
                                     <option value="viewer">İzleyici (Sadece Okuma)</option>
@@ -110,13 +110,13 @@ export default function RoleManagementModule({ currentUser }) {
                             <button
                                 type="button"
                                 onClick={() => setShowForm(false)}
-                                className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                                className="btn-secondary"
                             >
                                 İptal
                             </button>
                             <button
                                 type="submit"
-                                className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg font-medium transition-colors"
+                                className="btn-primary"
                             >
                                 Davet Et
                             </button>
@@ -125,79 +125,81 @@ export default function RoleManagementModule({ currentUser }) {
                 </div>
             )}
 
-            <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
-                <table className="w-full">
-                    <thead className="bg-slate-50">
+            <div className="rounded-[6px] border border-[#d2d2d7] overflow-hidden shadow-sm">
+                <table className="table-industrial">
+                    <thead>
                         <tr>
-                            <th className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Kullanıcı</th>
-                            <th className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Rol</th>
-                            <th className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Durum</th>
-                            <th className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">İşlem</th>
+                            <th className="text-left py-3 px-4">Kullanıcı</th>
+                            <th className="text-left py-3 px-4">Rol</th>
+                            <th className="text-left py-3 px-4">Durum</th>
+                            <th className="text-right py-3 px-4">İşlem</th>
                         </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-200">
+                    <tbody className="divide-y divide-[#d2d2d7]">
                         {/* Always show the current user as Admin/Owner */}
-                        <tr className="bg-indigo-50/50">
-                            <td className="px-6 py-4 whitespace-nowrap">
+                        <tr className="bg-[#f5f5f7]">
+                            <td className="px-4 py-3 whitespace-nowrap">
                                 <div className="flex items-center">
-                                    <div className="h-8 w-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold mr-3">
+                                    <div className="h-8 w-8 rounded-full bg-[#e8f2ff] flex items-center justify-center text-[#0071e3] font-bold mr-3 border border-[#d0e6ff]">
                                         {currentUser.email[0].toUpperCase()}
                                     </div>
                                     <div>
-                                        <div className="text-sm font-medium text-slate-900">{currentUser.email}</div>
-                                        <div className="text-xs text-slate-500">Hesap Sahibi</div>
+                                        <div className="text-sm font-medium text-[#1d1d1f]">{currentUser.email}</div>
+                                        <div className="text-xs text-[#86868b]">Hesap Sahibi</div>
                                     </div>
                                 </div>
                             </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                                <span className="px-2 py-1 text-xs font-bold rounded-full bg-indigo-100 text-indigo-800">
+                            <td className="px-4 py-3 whitespace-nowrap">
+                                <span className="badge-industrial badge-industrial-blue">
                                     Admin
                                 </span>
                             </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                                <span className="text-sm text-green-600 flex items-center gap-1">
+                            <td className="px-4 py-3 whitespace-nowrap">
+                                <span className="text-sm text-green-600 flex items-center gap-1 font-medium">
                                     <Shield className="h-4 w-4" /> Aktif
                                 </span>
                             </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                <span className="text-slate-400">-</span>
+                            <td className="px-4 py-3 whitespace-nowrap text-right text-sm font-medium">
+                                <span className="text-[#86868b]">-</span>
                             </td>
                         </tr>
 
                         {members.map((member) => (
-                            <tr key={member.id} className="hover:bg-slate-50 transition-colors">
-                                <td className="px-6 py-4 whitespace-nowrap">
+                            <tr key={member.id} className="hover:bg-[#f5f5f7] transition-colors">
+                                <td className="px-4 py-3 whitespace-nowrap">
                                     <div className="flex items-center">
-                                        <div className="h-8 w-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 font-bold mr-3">
+                                        <div className="h-8 w-8 rounded-full bg-[#f5f5f7] flex items-center justify-center text-[#1d1d1f] font-bold mr-3 border border-[#d2d2d7]">
                                             {member.member_email[0].toUpperCase()}
                                         </div>
-                                        <div className="text-sm font-medium text-slate-900">{member.member_email}</div>
+                                        <div className="text-sm font-medium text-[#1d1d1f]">{member.member_email}</div>
                                     </div>
                                 </td>
-                                <td className="px-6 py-4 whitespace-nowrap">
-                                    <span className={`px-2 py-1 text-xs font-bold rounded-full ${member.role === 'admin' ? 'bg-purple-100 text-purple-800' :
-                                            member.role === 'operator' ? 'bg-blue-100 text-blue-800' :
-                                                'bg-slate-100 text-slate-800'
+                                <td className="px-4 py-3 whitespace-nowrap">
+                                    <span className={`badge-industrial ${member.role === 'admin' ? 'badge-industrial-blue' :
+                                        member.role === 'operator' ? 'badge-industrial-gray' :
+                                            'bg-[#f5f5f7] text-[#1d1d1f] border-[#d2d2d7]'
                                         }`}>
-                                        {member.role.charAt(0).toUpperCase() + member.role.slice(1)}
+                                        {member.role === 'admin' ? 'Yönetici' :
+                                            member.role === 'operator' ? 'Operatör' :
+                                                member.role === 'viewer' ? 'İzleyici' : member.role}
                                     </span>
                                 </td>
-                                <td className="px-6 py-4 whitespace-nowrap">
+                                <td className="px-4 py-3 whitespace-nowrap">
                                     {member.member_id ? (
-                                        <span className="text-sm text-green-600">Katıldı</span>
+                                        <span className="text-sm text-green-600 font-medium">Katıldı</span>
                                     ) : (
-                                        <span className="text-sm text-orange-500 flex items-center gap-1">
+                                        <span className="text-sm text-[#ff9f0a] flex items-center gap-1 font-medium">
                                             <Mail className="h-4 w-4" /> Bekliyor
                                         </span>
                                     )}
                                 </td>
-                                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                <td className="px-4 py-3 whitespace-nowrap text-right text-sm font-medium">
                                     <button
                                         onClick={() => handleRemove(member.id)}
-                                        className="text-red-600 hover:text-red-900 transition-colors"
+                                        className="text-[#d21e1e] hover:text-[#b91c1c] transition-colors"
                                         title="Yetkiyi Kaldır"
                                     >
-                                        <Trash2 className="h-5 w-5" />
+                                        <Trash2 className="h-4 w-4" />
                                     </button>
                                 </td>
                             </tr>
@@ -205,7 +207,7 @@ export default function RoleManagementModule({ currentUser }) {
 
                         {members.length === 0 && (
                             <tr>
-                                <td colspan="4" className="px-6 py-10 text-center text-slate-500">
+                                <td colSpan="4" className="px-4 py-8 text-center text-[#86868b]">
                                     Henüz başka kullanıcı eklenmemiş.
                                 </td>
                             </tr>

@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { DollarSign, Calendar, TrendingUp, TrendingDown, PieChart, BarChart2, Filter, Package, Users, ShoppingBag, Search } from 'lucide-react';
+import { DollarSign, Calendar, TrendingUp, TrendingDown, PieChart, BarChart2, Filter, Package, Users, ShoppingBag, Search, BarChart3 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 export default function FinancialReportsModule({ sales, productions, purchases, inventory, accounts, exchangeRates = { USD: 1, EUR: 0.92, TRY: 34.50 } }) {
@@ -87,10 +87,36 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
         let cogs = 0;
 
         filteredData.sales.forEach(s => {
-            revenue += parseVal(s.total_amount); // Assuming normalized currency or simple sum for now
-            // Simplified COGS logic: 70% of revenue if no direct link (placeholder)
-            // In real app, link to production cost
-            cogs += parseVal(s.total_amount) * 0.7;
+            const saleRev = parseVal(s.total_amount);
+            revenue += saleRev;
+
+            // NEW: Use cost columns directly from sales table if available (p_total_production_cost was stored as total_production_cost in DB)
+            if (s.total_production_cost && parseVal(s.total_production_cost) > 0) {
+                cogs += parseVal(s.total_production_cost);
+            } else {
+                // FALLBACK: Link to ACTUAL PRODUCTION COST (Existing Logic)
+                const prod = productions.find(p => p.id === s.production_id);
+                if (prod) {
+                    const batchTotalCost = (
+                        parseVal(prod.raw_material_cost) +
+                        parseVal(prod.packaging_cost) +
+                        parseVal(prod.shipping_cost) +
+                        parseVal(prod.overhead_cost) +
+                        parseVal(prod.financing_cost)
+                    );
+                    const unitCostBatch = batchTotalCost / (parseVal(prod.quantity) || 1);
+
+                    let unitCostInSaleCurrency = unitCostBatch;
+                    if (prod.currency !== s.currency) {
+                        const rateFrom = exchangeRates[prod.currency] || 1;
+                        const rateTo = exchangeRates[s.currency] || 1;
+                        unitCostInSaleCurrency = (unitCostBatch / rateFrom) * rateTo;
+                    }
+                    cogs += unitCostInSaleCurrency * parseVal(s.quantity);
+                } else {
+                    cogs += saleRev * 0.7; // Fallback to 70% if production record is missing
+                }
+            }
         });
 
         const grossProfit = revenue - cogs;
@@ -160,8 +186,9 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
 
             // Currency conversion
             if (p.currency !== currency) {
-                const rate = (p.currency === 'TRY' && currency === 'USD') ? 1 / 34.50 :
-                    (p.currency === 'USD' && currency === 'TRY') ? 34.50 : 1;
+                const rateFrom = exchangeRates[p.currency] || 1;
+                const rateTo = exchangeRates[currency] || 1;
+                const rate = rateTo / rateFrom;
                 r *= rate; pk *= rate; s *= rate; o *= rate; f *= rate;
             }
 
@@ -266,7 +293,7 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                 'Tarih': new Date(s.sale_date).toLocaleDateString('tr-TR'),
                 'Müşteri': s.customer_name || '-',
                 'Ürün': s.product_name || '-',
-                'Lot No': productions.find(p => p.id === s.production_id)?.lot_number || '-',
+                'Lot No': s.lot_no || '-',
                 'Miktar': parseFloat(s.quantity),
                 'Birim': (() => {
                     const prod = productions.find(p => p.id === s.production_id);
@@ -314,6 +341,9 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                     return (unitCost * parseFloat(s.quantity)).toFixed(2);
                 })()),
                 'Kar': parseFloat((() => {
+                    if (s.total_production_cost && parseVal(s.total_production_cost) > 0) {
+                        return (parseVal(s.total_amount) - parseVal(s.total_production_cost)).toFixed(2);
+                    }
                     const prod = productions.find(p => p.id === s.production_id);
                     if (!prod) return 0;
                     let prodTotalCost = (
@@ -390,25 +420,25 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
         <div className="space-y-6">
             {/* Header & Filters */}
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-                    <TrendingUp className="h-6 w-6 text-indigo-600" /> Raporlar
+                <h2 className="heading-industrial text-2xl flex items-center gap-2">
+                    <TrendingUp className="h-6 w-6 text-[#0071e3]" /> RAPORLAR
                 </h2>
-                <div className="flex bg-slate-100 p-1 rounded-lg">
+                <div className="flex bg-[#e5e5ea] p-1 rounded-lg">
                     <button
                         onClick={() => setActiveTab('summary')}
-                        className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${activeTab === 'summary' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}
+                        className={`px-4 py-2 rounded-[6px] text-[11px] font-bold uppercase tracking-wider transition-all ${activeTab === 'summary' ? 'bg-white text-[#1d1d1f] shadow-sm' : 'text-[#86868b] hover:text-[#1d1d1f]'}`}
                     >
                         Özet & Grafikler
                     </button>
                     <button
                         onClick={() => setActiveTab('purchasing_report')}
-                        className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${activeTab === 'purchasing_report' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}
+                        className={`px-4 py-2 rounded-[6px] text-[11px] font-bold uppercase tracking-wider transition-all ${activeTab === 'purchasing_report' ? 'bg-white text-[#1d1d1f] shadow-sm' : 'text-[#86868b] hover:text-[#1d1d1f]'}`}
                     >
                         Satın Almalar
                     </button>
                     <button
                         onClick={() => setActiveTab('sales_report')}
-                        className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${activeTab === 'sales_report' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}
+                        className={`px-4 py-2 rounded-[6px] text-[11px] font-bold uppercase tracking-wider transition-all ${activeTab === 'sales_report' ? 'bg-white text-[#1d1d1f] shadow-sm' : 'text-[#86868b] hover:text-[#1d1d1f]'}`}
                     >
                         Satış Raporu
                     </button>
@@ -416,14 +446,14 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
             </div>
 
             {/* DATE & SEARCH FILTERS */}
-            <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+            <div className="card-industrial p-4 grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
                 {/* Search */}
                 <div className="relative">
-                    <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                    <Search className="absolute left-3 top-2.5 h-4 w-4 text-[#86868b]" />
                     <input
                         type="text"
                         placeholder="Müşteri, Ürün veya Tedarikçi Ara..."
-                        className="w-full pl-9 bg-slate-50 border border-slate-200 rounded-lg p-2 text-sm focus:outline-none focus:border-indigo-500"
+                        className="input-industrial pl-9"
                         value={searchTerm}
                         onChange={e => setSearchTerm(e.target.value)}
                     />
@@ -431,10 +461,10 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
 
                 {/* Date Range */}
                 <div className="flex flex-wrap gap-2 justify-end items-center">
-                    <Filter className="h-4 w-4 text-slate-400" />
-                    <span className="text-xs font-medium text-slate-500 uppercase">Tarih:</span>
+                    <Filter className="h-4 w-4 text-[#86868b]" />
+                    <span className="text-xs font-bold text-[#86868b] uppercase tracking-wide">Tarih:</span>
                     <select
-                        className="p-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-indigo-500"
+                        className="select-industrial sm:w-auto"
                         value={dateRange}
                         onChange={e => setDateRange(e.target.value)}
                     >
@@ -453,14 +483,14 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                                 type="date"
                                 value={startDate}
                                 onChange={(e) => setStartDate(e.target.value)}
-                                className="border border-slate-300 rounded px-2 py-1 text-sm text-slate-600"
+                                className="input-industrial py-1 text-xs"
                             />
-                            <span className="text-slate-400">-</span>
+                            <span className="text-[#86868b]">-</span>
                             <input
                                 type="date"
                                 value={endDate}
                                 onChange={(e) => setEndDate(e.target.value)}
-                                className="border border-slate-300 rounded px-2 py-1 text-sm text-slate-600"
+                                className="input-industrial py-1 text-xs"
                             />
                         </div>
                     )}
@@ -471,38 +501,38 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                 <>
                     {/* P&L Cards */}
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                        <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-blue-500">
-                            <div className="text-slate-500 text-sm font-medium mb-1">Toplam Gelir</div>
-                            <div className="text-2xl font-bold text-slate-800">{formatMoney(financials.revenue)}</div>
-                            <div className="text-xs text-green-600 flex items-center mt-1">
+                        <div className="card-industrial p-6 border-l-4 border-[#0071e3]">
+                            <div className="text-[#86868b] text-[13px] font-bold uppercase tracking-wide mb-1">Toplam Gelir</div>
+                            <div className="text-3xl font-semibold text-[#1d1d1f] tracking-tight">{formatMoney(financials.revenue)}</div>
+                            <div className="text-xs text-[#107c10] flex items-center mt-1 font-medium">
                                 <TrendingUp className="h-3 w-3 mr-1" /> Satışlardan
                             </div>
                         </div>
 
-                        <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-red-500">
-                            <div className="text-slate-500 text-sm font-medium mb-1">SMM (Maliyet)</div>
-                            <div className="text-2xl font-bold text-slate-800">{formatMoney(financials.cogs)}</div>
-                            <div className="text-xs text-red-600 flex items-center mt-1">
+                        <div className="card-industrial p-6 border-l-4 border-[#d21e1e]">
+                            <div className="text-[#86868b] text-[13px] font-bold uppercase tracking-wide mb-1">SMM (Maliyet)</div>
+                            <div className="text-3xl font-semibold text-[#1d1d1f] tracking-tight">{formatMoney(financials.cogs)}</div>
+                            <div className="text-xs text-[#d21e1e] flex items-center mt-1 font-medium">
                                 <TrendingDown className="h-3 w-3 mr-1" /> Üretim Maliyeti
                             </div>
                         </div>
 
-                        <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-indigo-500">
-                            <div className="text-slate-500 text-sm font-medium mb-1">Brüt Kar</div>
-                            <div className={`text-2xl font-bold ${financials.grossProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        <div className="card-industrial p-6 border-l-4 border-[#5e5ce6]">
+                            <div className="text-[#86868b] text-[13px] font-bold uppercase tracking-wide mb-1">Brüt Kar</div>
+                            <div className={`text-3xl font-semibold tracking-tight ${financials.grossProfit >= 0 ? 'text-[#107c10]' : 'text-[#d21e1e]'}`}>
                                 {formatMoney(financials.grossProfit)}
                             </div>
-                            <div className="text-xs text-slate-400 mt-1">
+                            <div className="text-xs text-[#86868b] mt-1 font-medium">
                                 Marj: {financials.revenue > 0 ? ((financials.grossProfit / financials.revenue) * 100).toFixed(1) : 0}%
                             </div>
                         </div>
 
-                        <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-green-500">
-                            <div className="text-slate-500 text-sm font-medium mb-1">Net Kar</div>
-                            <div className={`text-2xl font-bold ${financials.netProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        <div className="card-industrial p-6 border-l-4 border-[#107c10]">
+                            <div className="text-[#86868b] text-[13px] font-bold uppercase tracking-wide mb-1">Net Kar</div>
+                            <div className={`text-3xl font-semibold tracking-tight ${financials.netProfit >= 0 ? 'text-[#107c10]' : 'text-[#d21e1e]'}`}>
                                 {formatMoney(financials.netProfit)}
                             </div>
-                            <div className="text-xs text-slate-400 mt-1">
+                            <div className="text-xs text-[#86868b] mt-1 font-medium">
                                 (Vergi öncesi)
                             </div>
                         </div>
@@ -511,28 +541,28 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                     {/* Charts Section */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         {/* Cost Breakdown Bar Chart */}
-                        <div className="bg-white p-6 rounded-xl shadow-lg border border-slate-200">
-                            <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2">
-                                <PieChart className="h-5 w-5 text-indigo-600" /> Üretim Maliyet Dağılımı
+                        <div className="card-industrial p-6">
+                            <h3 className="font-bold text-[#1d1d1f] mb-6 flex items-center gap-2 text-lg">
+                                <PieChart className="h-5 w-5 text-[#0071e3]" /> Üretim Maliyet Dağılımı
                             </h3>
 
                             {costBreakdown.total > 0 ? (
                                 <div className="space-y-4">
                                     {[
-                                        { label: 'Hammadde', value: costBreakdown.raw, color: 'bg-blue-500' },
-                                        { label: 'Ambalaj', value: costBreakdown.pkg, color: 'bg-purple-500' },
-                                        { label: 'Nakliye', value: costBreakdown.ship, color: 'bg-orange-500' },
-                                        { label: 'Genel Gider', value: costBreakdown.overhead, color: 'bg-slate-500' },
-                                        { label: 'Finansman', value: costBreakdown.finance, color: 'bg-red-500' }
+                                        { label: 'Hammadde', value: costBreakdown.raw, color: 'bg-[#0071e3]' },
+                                        { label: 'Ambalaj', value: costBreakdown.pkg, color: 'bg-[#5e5ce6]' },
+                                        { label: 'Nakliye', value: costBreakdown.ship, color: 'bg-[#ff9f0a]' },
+                                        { label: 'Genel Gider', value: costBreakdown.overhead, color: 'bg-[#86868b]' },
+                                        { label: 'Finansman', value: costBreakdown.finance, color: 'bg-[#d21e1e]' }
                                     ].map((item, idx) => {
                                         const percent = (item.value / costBreakdown.total) * 100;
                                         return (
                                             <div key={idx}>
                                                 <div className="flex justify-between text-sm mb-1">
-                                                    <span className="text-slate-600 font-medium">{item.label}</span>
-                                                    <span className="text-slate-800 font-bold">{formatMoney(item.value)} ({percent.toFixed(1)}%)</span>
+                                                    <span className="text-[#86868b] font-medium">{item.label}</span>
+                                                    <span className="text-[#1d1d1f] font-bold">{formatMoney(item.value)} ({percent.toFixed(1)}%)</span>
                                                 </div>
-                                                <div className="w-full bg-slate-100 rounded-full h-2.5">
+                                                <div className="w-full bg-[#f5f5f7] rounded-full h-2.5">
                                                     <div
                                                         className={`h-2.5 rounded-full ${item.color}`}
                                                         style={{ width: `${percent}%` }}
@@ -543,43 +573,43 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                                     })}
                                 </div>
                             ) : (
-                                <div className="text-center py-10 text-slate-400">
+                                <div className="text-center py-10 text-[#86868b]">
                                     Bu dönemde üretim verisi bulunamadı.
                                 </div>
                             )}
                         </div>
 
                         {/* Profitability Analysis */}
-                        <div className="bg-white p-6 rounded-xl shadow-lg border border-slate-200">
-                            <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2">
-                                <BarChart2 className="h-5 w-5 text-green-600" /> Karlılık Analizi
+                        <div className="card-industrial p-6">
+                            <h3 className="font-bold text-[#1d1d1f] mb-6 flex items-center gap-2 text-lg">
+                                <BarChart2 className="h-5 w-5 text-[#107c10]" /> Karlılık Analizi
                             </h3>
 
                             <div className="space-y-6">
-                                <div className="p-4 bg-green-50 rounded-lg border border-green-100">
-                                    <div className="text-sm text-green-800 font-bold mb-2">En Karlı Ürün (Birim Başına)</div>
+                                <div className="p-4 bg-[#f2fcf5] rounded-[6px] border border-[#a8dab5]">
+                                    <div className="text-sm text-[#107c10] font-bold mb-2">En Karlı Ürün (Birim Başına)</div>
                                     {/* Logic to find most profitable product */}
                                     {(() => {
-                                        if (filteredData.productions.length === 0) return <div className="text-sm text-slate-500">-</div>;
+                                        if (filteredData.productions.length === 0) return <div className="text-sm text-[#86868b]">-</div>;
                                         const sorted = [...filteredData.productions].sort((a, b) => (b.profit_amount || 0) - (a.profit_amount || 0));
                                         const top = sorted[0];
                                         return (
                                             <div>
-                                                <div className="text-lg font-bold text-green-700">{top.lot_number}</div>
-                                                <div className="text-sm text-green-600">Kar: {parseVal(top.profit_amount).toFixed(2)} {top.currency}</div>
+                                                <div className="text-lg font-bold text-[#107c10]">{top.lot_number}</div>
+                                                <div className="text-sm text-[#0b5c0b]">Kar: {parseVal(top.profit_amount).toFixed(2)} {top.currency}</div>
                                             </div>
                                         );
                                     })()}
                                 </div>
 
-                                <div className="p-4 bg-indigo-50 rounded-lg border border-indigo-100">
-                                    <div className="text-sm text-indigo-800 font-bold mb-2">Ortalama Kar Marjı</div>
+                                <div className="p-4 bg-[#f5f5f7] rounded-[6px] border border-[#d2d2d7]">
+                                    <div className="text-sm text-[#0071e3] font-bold mb-2">Ortalama Kar Marjı</div>
                                     {(() => {
-                                        if (filteredData.productions.length === 0) return <div className="text-sm text-slate-500">-</div>;
+                                        if (filteredData.productions.length === 0) return <div className="text-sm text-[#86868b]">-</div>;
                                         const totalMargin = filteredData.productions.reduce((sum, p) => sum + parseVal(p.profit_margin_percent), 0);
                                         const avg = totalMargin / filteredData.productions.length;
                                         return (
-                                            <div className="text-2xl font-bold text-indigo-700">%{avg.toFixed(1)}</div>
+                                            <div className="text-2xl font-bold text-[#0071e3] tracking-tight">%{avg.toFixed(1)}</div>
                                         );
                                     })()}
                                 </div>
@@ -590,11 +620,11 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
             )}
 
             {activeTab === 'purchasing_report' && (
-                <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
-                    <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+                <div className="card-industrial">
+                    <div className="p-4 border-b border-[#d2d2d7] flex justify-between items-center bg-[#f5f5f7]">
                         <div className="space-y-1">
-                            <h3 className="font-bold text-slate-700">Satın Alma Raporu</h3>
-                            <p className="text-xs text-slate-500">
+                            <h3 className="font-bold text-[#1d1d1f]">Satın Alma Raporu</h3>
+                            <p className="text-xs text-[#86868b]">
                                 {dateRange === 'all' ? 'Tüm Zamanlar' :
                                     dateRange === 'month' ? 'Bu Ay' :
                                         dateRange === 'year' ? 'Bu Yıl' :
@@ -603,17 +633,17 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                         </div>
                         <button
                             onClick={exportPurchasingReport}
-                            className="flex items-center gap-2 text-sm font-medium text-green-600 hover:bg-green-50 px-3 py-2 rounded-lg transition-colors"
+                            className="btn-primary-green flex items-center gap-2 text-xs"
                         >
                             <BarChart2 className="h-4 w-4" /> Excel'e Aktar
                         </button>
                     </div>
 
                     {/* SPENDING ANALYSIS SUMMARY */}
-                    <div className="p-4 bg-slate-50 border-b border-slate-200 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="p-4 bg-white border-b border-[#d2d2d7] grid grid-cols-1 md:grid-cols-2 gap-4">
                         {/* 1. Category Breakdown */}
-                        <div className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
-                            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Harcama Dağılımı (Kategori)</h4>
+                        <div className="bg-[#f5f5f7] p-3 rounded-[6px] border border-[#d2d2d7]">
+                            <h4 className="text-[10px] font-bold text-[#86868b] uppercase tracking-wider mb-2">Harcama Dağılımı (Kategori)</h4>
                             <div className="space-y-1">
                                 {(() => {
                                     const cats = { 'Hammadde': {}, 'Ambalaj': {}, 'Diğer': {} };
@@ -638,9 +668,9 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                                         );
                                         if (parts.length === 0) return null;
                                         return (
-                                            <div key={cat} className="flex justify-between text-sm">
-                                                <span className="text-slate-600 font-medium">{cat}:</span>
-                                                <span className="text-slate-800">{parts.join(' + ')}</span>
+                                            <div key={cat} className="flex justify-between text-xs">
+                                                <span className="text-[#86868b] font-medium">{cat}:</span>
+                                                <span className="text-[#1d1d1f] font-mono">{parts.join(' + ')}</span>
                                             </div>
                                         );
                                     });
@@ -649,8 +679,8 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                         </div>
 
                         {/* 2. Quick Currency Stats */}
-                        <div className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm flex flex-col justify-center">
-                            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Toplam Harcama</h4>
+                        <div className="bg-[#f5f5f7] p-3 rounded-[6px] border border-[#d2d2d7] flex flex-col justify-center">
+                            <h4 className="text-[10px] font-bold text-[#86868b] uppercase tracking-wider mb-2">Toplam Harcama</h4>
                             <div className="flex flex-wrap gap-3">
                                 {(() => {
                                     const totals = {};
@@ -666,7 +696,7 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                                     });
 
                                     return Object.entries(totals).map(([cur, val]) => (
-                                        <div key={cur} className="bg-indigo-50 px-3 py-1 rounded text-indigo-700 font-bold border border-indigo-100">
+                                        <div key={cur} className="bg-[#e8f2ff] px-3 py-1 rounded-[4px] text-[#0071e3] font-bold text-xs border border-[#d0e6ff] font-mono">
                                             {val.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {cur}
                                         </div>
                                     ));
@@ -676,20 +706,20 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                     </div>
 
                     <div className="overflow-x-auto">
-                        <table className="w-full text-left text-sm">
-                            <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                        <table className="table-industrial">
+                            <thead>
                                 <tr>
-                                    <th className="p-4">Tarih</th>
-                                    <th className="p-4">Tedarikçi</th>
-                                    <th className="p-4">Ürün / Açıklama</th>
-                                    <th className="p-4 text-right">Miktar</th>
-                                    <th className="p-4 text-center">Birim</th>
-                                    <th className="p-4 text-right">Birim Fiyat</th>
-                                    <th className="p-4 text-right">Vade</th>
-                                    <th className="p-4 text-right">Toplam</th>
+                                    <th>Tarih</th>
+                                    <th>Tedarikçi</th>
+                                    <th>Ürün / Açıklama</th>
+                                    <th className="text-right">Miktar</th>
+                                    <th className="text-center">Birim</th>
+                                    <th className="text-right">Birim Fiyat</th>
+                                    <th className="text-right">Vade</th>
+                                    <th className="text-right">Toplam</th>
                                 </tr>
                             </thead>
-                            <tbody className="divide-y divide-slate-100">
+                            <tbody className="divide-y divide-[#d2d2d7]">
                                 {filteredData.purchases.length > 0 ? (
                                     filteredData.purchases.map(p => {
                                         const supplier = accounts.find(a => a.id === p.supplier_id);
@@ -709,23 +739,23 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                                         const calculatedTotal = roundedQty * p.price;
 
                                         return (
-                                            <tr key={p.id} className="hover:bg-slate-50">
-                                                <td className="p-4 text-slate-600">{new Date(p.created_at).toLocaleDateString('tr-TR')}</td>
-                                                <td className="p-4 font-medium text-slate-900">{supplier?.name || '-'}</td>
-                                                <td className="p-4 text-slate-800">{p.item_name}</td>
-                                                <td className="p-4 text-right font-mono text-slate-600">
+                                            <tr key={p.id} className="hover:bg-[#f5f5f7] transition-colors">
+                                                <td className="p-4 text-[#1d1d1f]">{new Date(p.created_at).toLocaleDateString('tr-TR')}</td>
+                                                <td className="p-4 font-medium text-[#1d1d1f]">{supplier?.name || '-'}</td>
+                                                <td className="p-4 text-[#1d1d1f]">{p.item_name}</td>
+                                                <td className="p-4 text-right font-mono text-[#86868b]">
                                                     {formattedQty}
                                                 </td>
-                                                <td className="p-4 text-center text-xs text-slate-500 font-medium">
+                                                <td className="p-4 text-center text-xs text-[#86868b] font-medium">
                                                     {unit}
                                                 </td>
-                                                <td className="p-4 text-right font-mono text-slate-600">
+                                                <td className="p-4 text-right font-mono text-[#86868b]">
                                                     {parseFloat(p.price).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {p.currency}
                                                 </td>
-                                                <td className="p-4 text-right font-mono text-slate-600">
+                                                <td className="p-4 text-right font-mono text-[#86868b]">
                                                     {p.payment_term || 0} Gün
                                                 </td>
-                                                <td className="p-4 text-right font-mono font-bold text-indigo-600">
+                                                <td className="p-4 text-right font-mono font-bold text-[#0071e3]">
                                                     {calculatedTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {p.currency}
                                                 </td>
                                             </tr>
@@ -733,16 +763,16 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                                     })
                                 ) : (
                                     <tr>
-                                        <td colSpan="8" className="p-8 text-center text-slate-400">
+                                        <td colSpan="8" className="p-8 text-center text-[#86868b]">
                                             Seçilen tarih aralığında ve arama kriterlerinde satın alma kaydı bulunamadı.
                                         </td>
                                     </tr>
                                 )}
                             </tbody>
-                            <tfoot className="bg-slate-100 font-bold text-slate-700 border-t-2 border-slate-300">
+                            <tfoot className="bg-[#f5f5f7] font-bold text-[#1d1d1f] border-t-2 border-[#d2d2d7] text-xs">
                                 <tr>
                                     <td colSpan="4" className="p-4 text-right align-top">Para Birimi Bazlı Toplamlar:</td>
-                                    <td colSpan="4" className="p-4 bg-slate-50">
+                                    <td colSpan="4" className="p-4 bg-white">
                                         <div className="flex flex-col gap-2 items-end">
                                             {(() => {
                                                 const totals = {};
@@ -757,12 +787,12 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                                                     totals[p.currency] += total;
                                                 });
 
-                                                if (Object.keys(totals).length === 0) return <div className="text-slate-400">Veri yok</div>;
+                                                if (Object.keys(totals).length === 0) return <div className="text-[#86868b]">Veri yok</div>;
 
                                                 return Object.entries(totals).map(([cur, val]) => (
-                                                    <div key={cur} className="flex justify-between w-full max-w-xs border-b border-slate-200 pb-1 last:border-0">
-                                                        <span className="text-slate-500 font-medium mr-4">Toplam {cur}:</span>
-                                                        <span className="text-indigo-700 text-lg">
+                                                    <div key={cur} className="flex justify-between w-full max-w-xs border-b border-[#d2d2d7] pb-1 last:border-0 font-mono">
+                                                        <span className="text-[#86868b] font-medium mr-4">Toplam {cur}:</span>
+                                                        <span className="text-[#0071e3] text-sm">
                                                             {val.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                                         </span>
                                                     </div>
@@ -799,25 +829,32 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                                 const revenueInTry = (parseFloat(s.total_amount) / rate) * baseRate;
                                 totalRevenue += revenueInTry;
 
-                                // Cost
-                                const prod = productions.find(p => p.id === s.production_id);
-                                if (prod) {
-                                    let prodTotal = (
-                                        (parseFloat(prod.raw_material_cost) || 0) +
-                                        (parseFloat(prod.packaging_cost) || 0) +
-                                        (parseFloat(prod.shipping_cost) || 0) +
-                                        (parseFloat(prod.overhead_cost) || 0) +
-                                        (parseFloat(prod.financing_cost) || 0)
-                                    );
-                                    let unitCost = prodTotal / parseFloat(prod.quantity || 1);
-
-                                    const prodRate = exchangeRates[prod.currency] || 1;
-                                    const costInTry = (unitCost * parseFloat(s.quantity) / prodRate) * baseRate;
+                                // NEW: Use detailed cost from sales table if available
+                                if (s.total_production_cost && parseVal(s.total_production_cost) > 0) {
+                                    const costInTry = (parseVal(s.total_production_cost) / rate) * baseRate;
                                     totalCost += costInTry;
                                     totalProfit += (revenueInTry - costInTry);
                                 } else {
-                                    // If no cost info, profit = revenue (technically wrong but robust fallback) or 0 cost
-                                    totalProfit += revenueInTry;
+                                    // FALLBACK: Old Batch Logic
+                                    const prod = productions.find(p => p.id === s.production_id);
+                                    if (prod) {
+                                        let prodTotal = (
+                                            (parseFloat(prod.raw_material_cost) || 0) +
+                                            (parseFloat(prod.packaging_cost) || 0) +
+                                            (parseFloat(prod.shipping_cost) || 0) +
+                                            (parseFloat(prod.overhead_cost) || 0) +
+                                            (parseFloat(prod.financing_cost) || 0)
+                                        );
+                                        let unitCost = prodTotal / parseFloat(prod.quantity || 1);
+
+                                        const prodRate = exchangeRates[prod.currency] || 1;
+                                        const costInTry = (unitCost * parseFloat(s.quantity) / prodRate) * baseRate;
+                                        totalCost += costInTry;
+                                        totalProfit += (revenueInTry - costInTry);
+                                    } else {
+                                        // If no cost info, assume 0 cost for profit calculation (optimistic fallback)
+                                        totalProfit += revenueInTry;
+                                    }
                                 }
                             });
 
@@ -825,21 +862,21 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
 
                             return (
                                 <>
-                                    <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-indigo-500">
-                                        <div className="text-slate-500 text-xs font-bold uppercase">Toplam Satış (TRY)</div>
-                                        <div className="text-2xl font-bold text-slate-800">{totalRevenue.toLocaleString('tr-TR', { maximumFractionDigits: 0 })} ₺</div>
+                                    <div className="card-industrial p-4 border-l-4 border-[#0071e3]">
+                                        <div className="text-[#86868b] text-[10px] font-bold uppercase tracking-wide mb-1">Toplam Satış (TRY)</div>
+                                        <div className="text-2xl font-semibold text-[#1d1d1f] tracking-tight">{totalRevenue.toLocaleString('tr-TR', { maximumFractionDigits: 0 })} ₺</div>
                                     </div>
-                                    <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-red-500">
-                                        <div className="text-slate-500 text-xs font-bold uppercase">Toplam Maliyet (TRY)</div>
-                                        <div className="text-xl font-bold text-slate-700">{totalCost.toLocaleString('tr-TR', { maximumFractionDigits: 0 })} ₺</div>
+                                    <div className="card-industrial p-4 border-l-4 border-[#d21e1e]">
+                                        <div className="text-[#86868b] text-[10px] font-bold uppercase tracking-wide mb-1">Toplam Maliyet (TRY)</div>
+                                        <div className="text-xl font-semibold text-[#1d1d1f] tracking-tight">{totalCost.toLocaleString('tr-TR', { maximumFractionDigits: 0 })} ₺</div>
                                     </div>
-                                    <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-green-500">
-                                        <div className="text-slate-500 text-xs font-bold uppercase">Net Kar (TRY)</div>
-                                        <div className="text-2xl font-bold text-green-600">{totalProfit.toLocaleString('tr-TR', { maximumFractionDigits: 0 })} ₺</div>
+                                    <div className="card-industrial p-4 border-l-4 border-[#107c10]">
+                                        <div className="text-[#86868b] text-[10px] font-bold uppercase tracking-wide mb-1">Net Kar (TRY)</div>
+                                        <div className="text-2xl font-bold text-[#107c10] tracking-tight">{totalProfit.toLocaleString('tr-TR', { maximumFractionDigits: 0 })} ₺</div>
                                     </div>
-                                    <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-blue-400">
-                                        <div className="text-slate-500 text-xs font-bold uppercase">Ortalama Marj</div>
-                                        <div className="text-2xl font-bold text-blue-600">%{margin.toFixed(1)}</div>
+                                    <div className="card-industrial p-4 border-l-4 border-[#5e5ce6]">
+                                        <div className="text-[#86868b] text-[10px] font-bold uppercase tracking-wide mb-1">Ortalama Marj</div>
+                                        <div className="text-2xl font-bold text-[#5e5ce6] tracking-tight">%{margin.toFixed(1)}</div>
                                     </div>
                                 </>
                             );
@@ -847,9 +884,9 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                     </div>
 
                     {/* MONTHLY TREND CHART (Simple CSS Bar Chart) */}
-                    <div className="bg-white p-6 rounded-xl shadow-lg border border-slate-200">
-                        <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
-                            <BarChart2 className="h-5 w-5 text-indigo-600" /> Aylık Satış Trendi (Son 6 Ay)
+                    <div className="card-industrial p-6">
+                        <h3 className="font-bold text-[#1d1d1f] mb-4 flex items-center gap-2 text-lg">
+                            <BarChart2 className="h-5 w-5 text-[#0071e3]" /> Aylık Satış Trendi (Son 6 Ay)
                         </h3>
                         <div className="flex items-end gap-2 h-40 pt-4 pb-2">
                             {(() => {
@@ -877,26 +914,26 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                                 return Object.entries(months).map(([m, val]) => (
                                     <div key={m} className="flex-1 flex flex-col items-center group relative">
                                         <div
-                                            className="w-full bg-indigo-100 dark:bg-indigo-900 rounded-t-sm hover:bg-indigo-200 transition-all relative group-hover:shadow-lg"
+                                            className="w-full bg-[#e8f2ff] rounded-t-sm hover:bg-[#d0e6ff] transition-all relative group-hover:shadow-lg"
                                             style={{ height: `${(val / maxVal) * 100}%` }}
                                         >
                                             {/* Tooltip */}
-                                            <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-10">
+                                            <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-[#1d1d1f] text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-10 transition-opacity font-mono">
                                                 {val.toLocaleString('tr-TR', { maximumFractionDigits: 0 })} ₺
                                             </div>
                                         </div>
-                                        <div className="text-[10px] text-slate-500 mt-1 rotate-0">{m.split('-')[1]}</div>
+                                        <div className="text-[10px] text-[#86868b] mt-1 rotate-0 font-medium">{m.split('-')[1]}</div>
                                     </div>
                                 ));
                             })()}
                         </div>
                     </div>
 
-                    <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
-                        <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+                    <div className="card-industrial">
+                        <div className="p-4 border-b border-[#d2d2d7] flex justify-between items-center bg-[#f5f5f7]">
                             <div className="space-y-1">
-                                <h3 className="font-bold text-slate-700">Satış Raporu</h3>
-                                <p className="text-xs text-slate-500">
+                                <h3 className="font-bold text-[#1d1d1f]">Satış Raporu</h3>
+                                <p className="text-xs text-[#86868b]">
                                     {dateRange === 'all' ? 'Tüm Zamanlar' :
                                         dateRange === 'month' ? 'Bu Ay' :
                                             dateRange === 'last_month' ? 'Geçen Ay' :
@@ -907,18 +944,18 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                                 </p>
                             </div>
                             <div className="flex items-center gap-4">
-                                <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-600 hover:text-indigo-600 transition-colors">
+                                <label className="flex items-center gap-2 cursor-pointer text-sm text-[#1d1d1f] transition-all hover:opacity-80">
                                     <input
                                         type="checkbox"
                                         checked={showCostDetails}
                                         onChange={e => setShowCostDetails(e.target.checked)}
-                                        className="rounded text-indigo-600 focus:ring-indigo-500"
+                                        className="rounded text-[#0071e3] focus:ring-[#0071e3]"
                                     />
-                                    <span className="font-medium">Maliyet & Kar Göster</span>
+                                    <span className="font-medium text-xs">Maliyet & Kar Göster</span>
                                 </label>
                                 <button
                                     onClick={exportSalesReport}
-                                    className="flex items-center gap-2 text-sm font-medium text-green-600 hover:bg-green-50 px-3 py-2 rounded-lg transition-colors"
+                                    className="btn-primary-green flex items-center gap-2 text-xs"
                                 >
                                     <BarChart2 className="h-4 w-4" /> Excel'e Aktar
                                 </button>
@@ -926,26 +963,26 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                         </div>
 
                         <div className="overflow-x-auto">
-                            <table className="w-full text-sm text-left">
-                                <thead className="bg-slate-50 text-slate-600 font-bold uppercase text-xs">
+                            <table className="table-industrial">
+                                <thead>
                                     <tr>
-                                        <th className="p-4">Tarih</th>
-                                        <th className="p-4">Müşteri</th>
-                                        <th className="p-4">Ürün</th>
-                                        <th className="p-4">Lot No</th>
-                                        <th className="p-4 text-right">Miktar</th>
-                                        <th className="p-4 text-right">Birim Fiyat</th>
-                                        <th className="p-4 text-right">Toplam</th>
+                                        <th>Tarih</th>
+                                        <th>Müşteri</th>
+                                        <th>Ürün</th>
+                                        <th>Lot No</th>
+                                        <th className="text-right">Miktar</th>
+                                        <th className="text-right">Birim Fiyat</th>
+                                        <th className="text-right">Toplam</th>
                                         {showCostDetails && (
                                             <>
-                                                <th className="p-4 text-right bg-slate-100">Üretim Birim Mal.</th>
-                                                <th className="p-4 text-right bg-slate-100">Üretim Toplam Mal.</th>
-                                                <th className="p-4 text-right bg-slate-100">Kar</th>
+                                                <th className="text-right bg-[#f2f2f7]">Üretim Birim Mal.</th>
+                                                <th className="text-right bg-[#f2f2f7]">Üretim Toplam Mal.</th>
+                                                <th className="text-right bg-[#f2f2f7]">Kar</th>
                                             </>
                                         )}
                                     </tr>
                                 </thead>
-                                <tbody className="divide-y divide-slate-100">
+                                <tbody className="divide-y divide-[#d2d2d7]">
                                     {filteredData.sales.length > 0 ? (
                                         filteredData.sales.map(s => {
                                             // Calculate Cost & Profit for Row
@@ -954,7 +991,12 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                                             let totalCost = 0;
                                             let profit = 0;
 
-                                            if (prod) {
+                                            if (s.total_production_cost && parseVal(s.total_production_cost) > 0) {
+                                                totalCost = parseVal(s.total_production_cost);
+                                                unitCost = totalCost / parseVal(s.quantity || 1);
+                                                profit = parseVal(s.total_amount) - totalCost;
+                                            } else if (prod) {
+                                                // Batch Fallback
                                                 let prodTotal = (
                                                     (parseFloat(prod.raw_material_cost) || 0) +
                                                     (parseFloat(prod.packaging_cost) || 0) +
@@ -963,7 +1005,6 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                                                     (parseFloat(prod.financing_cost) || 0)
                                                 );
                                                 unitCost = prodTotal / parseFloat(prod.quantity || 1);
-                                                // Convert
                                                 if (prod.currency !== s.currency) {
                                                     const costInBase = unitCost / (exchangeRates[prod.currency] || 1);
                                                     unitCost = costInBase * (exchangeRates[s.currency] || 1);
@@ -973,30 +1014,34 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                                             }
 
                                             return (
-                                                <tr key={s.id} className="hover:bg-slate-50">
-                                                    <td className="p-4 text-slate-600">{new Date(s.sale_date).toLocaleDateString('tr-TR')}</td>
-                                                    <td className="p-4 font-medium text-slate-900">{s.customer_name}</td>
-                                                    <td className="p-4 text-slate-800">{s.product_name}</td>
-                                                    <td className="p-4 font-mono text-xs text-slate-500">{prod?.lot_number || '-'}</td>
-                                                    <td className="p-4 text-right font-mono text-slate-600">{s.quantity}</td>
-                                                    <td className="p-4 text-right font-mono text-slate-600">
+                                                <tr key={s.id} className="hover:bg-[#f5f5f7] transition-colors">
+                                                    <td className="p-4 text-[#1d1d1f]">{new Date(s.sale_date).toLocaleDateString('tr-TR')}</td>
+                                                    <td className="p-4 font-medium text-[#1d1d1f]">{s.customer_name}</td>
+                                                    <td className="p-4 text-[#1d1d1f]">{s.product_name}</td>
+                                                    <td className="p-4">
+                                                        <span className="badge-industrial badge-industrial-blue">
+                                                            {s.lot_no || '-'}
+                                                        </span>
+                                                    </td>
+                                                    <td className="p-4 text-right font-mono text-[#86868b]">{s.quantity}</td>
+                                                    <td className="p-4 text-right font-mono text-[#86868b]">
                                                         {parseFloat(s.unit_price).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} {s.currency}
                                                     </td>
-                                                    <td className="p-4 text-right font-mono font-bold text-green-600">
+                                                    <td className="p-4 text-right font-mono font-bold text-[#107c10]">
                                                         {parseFloat(s.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} {s.currency}
                                                     </td>
                                                     {showCostDetails && (
-                                                        <td className="p-4 text-right font-mono text-slate-500 bg-slate-50 border-l border-slate-100">
+                                                        <td className="p-4 text-right font-mono text-[#86868b] bg-[#f9f9fa] border-l border-[#d2d2d7]">
                                                             <div className="text-xs">{unitCost.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} {s.currency}</div>
                                                         </td>
                                                     )}
                                                     {showCostDetails && (
-                                                        <td className="p-4 text-right font-mono text-slate-500 bg-slate-50 border-l border-slate-100">
+                                                        <td className="p-4 text-right font-mono text-[#86868b] bg-[#f9f9fa] border-l border-[#d2d2d7]">
                                                             <div className="font-bold">{totalCost.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} {s.currency}</div>
                                                         </td>
                                                     )}
                                                     {showCostDetails && (
-                                                        <td className={`p-4 text-right font-mono font-bold border-l border-slate-100 ${profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                                                        <td className={`p-4 text-right font-mono font-bold border-l border-[#d2d2d7] ${profit >= 0 ? 'text-[#107c10]' : 'text-[#d21e1e]'}`}>
                                                             {profit.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} {s.currency}
                                                         </td>
                                                     )}
@@ -1005,13 +1050,13 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                                         })
                                     ) : (
                                         <tr>
-                                            <td colSpan={showCostDetails ? "10" : "7"} className="p-8 text-center text-slate-400">
+                                            <td colSpan={showCostDetails ? "10" : "7"} className="p-8 text-center text-[#86868b]">
                                                 Seçilen tarih aralığında ve arama kriterlerinde satış bulunamadı.
                                             </td>
                                         </tr>
                                     )}
                                 </tbody>
-                                <tfoot className="bg-slate-50 border-t border-slate-200 font-bold text-slate-800">
+                                <tfoot className="bg-[#f5f5f7] border-t border-[#d2d2d7] font-bold text-[#1d1d1f]">
                                     {Object.entries((() => {
                                         const totals = {};
                                         filteredData.sales.forEach(s => {
@@ -1021,13 +1066,13 @@ export default function FinancialReportsModule({ sales, productions, purchases, 
                                         return totals;
                                     })()).map(([currency, total]) => (
                                         <tr key={currency}>
-                                            <td colSpan="5" className="p-4 text-right uppercase text-xs text-slate-500 tracking-wider">
+                                            <td colSpan="5" className="p-4 text-right uppercase text-xs text-[#86868b] tracking-wider">
                                                 Toplam {currency}:
                                             </td>
-                                            <td className="p-4 text-right font-mono text-green-700">
+                                            <td className="p-4 text-right font-mono text-[#107c10]">
                                                 {total.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {currency}
                                             </td>
-                                            {showCostDetails && <td colSpan="2"></td>}
+                                            {showCostDetails && <td colSpan="3"></td>}
                                         </tr>
                                     ))}
                                 </tfoot>

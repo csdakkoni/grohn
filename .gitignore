@@ -26,3 +26,7 @@ yarn-error.log*
 # Editor
 .vscode
 .idea
+
+# Agent Data
+.agent/
+*.sql.temp

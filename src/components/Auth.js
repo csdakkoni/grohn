@@ -16,34 +16,34 @@ export default function Auth() {
     };
 
     return (
-        <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
-            <div className="bg-white rounded-xl shadow-2xl p-8 w-full max-w-md">
+        <div className="min-h-screen bg-[#f5f5f7] flex items-center justify-center p-4">
+            <div className="card-industrial p-8 w-full max-w-md shadow-lg bg-white">
                 <div className="flex flex-col items-center mb-8">
-                    <div className="bg-indigo-100 p-3 rounded-full mb-4">
-                        <FlaskConical className="h-8 w-8 text-indigo-600" />
+                    <div className="bg-[#e8f2ff] p-3 rounded-full mb-4 border border-[#d0e6ff]">
+                        <FlaskConical className="h-8 w-8 text-[#0071e3]" />
                     </div>
-                    <h1 className="text-2xl font-bold text-slate-800">GROHN Kimya</h1>
-                    <p className="text-slate-500">ERP Sistemine Giriş</p>
+                    <h1 className="text-2xl font-bold text-[#1d1d1f]">GROHN</h1>
+                    <p className="text-[#86868b] text-sm">ERP Sistemine Giriş</p>
                 </div>
                 <form onSubmit={handleLogin} className="space-y-4">
                     <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">E-posta</label>
+                        <label className="label-industrial block">E-posta</label>
                         <input
                             type="email"
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
-                            className="w-full border-2 border-slate-200 rounded-lg p-3 focus:border-indigo-500 focus:outline-none"
+                            className="input-industrial"
                             placeholder="ornek@sirket.com"
                             required
                         />
                     </div>
                     <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Şifre</label>
+                        <label className="label-industrial block">Şifre</label>
                         <input
                             type="password"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
-                            className="w-full border-2 border-slate-200 rounded-lg p-3 focus:border-indigo-500 focus:outline-none"
+                            className="input-industrial"
                             placeholder="••••••••"
                             required
                         />
@@ -51,7 +51,7 @@ export default function Auth() {
                     <button
                         type="submit"
                         disabled={loading}
-                        className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-lg transition-colors disabled:opacity-50"
+                        className="btn-primary w-full"
                     >
                         {loading ? 'Giriş Yapılıyor...' : 'Giriş Yap'}
                     </button>
