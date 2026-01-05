@@ -1341,6 +1341,17 @@ export default function App() {
                                 />
                             </div>
                         )}
+
+                        {/* Universal Logout Button */}
+                        <div className="pt-4 mt-auto border-t border-white/10">
+                            <button
+                                onClick={handleSignOut}
+                                className="w-full group flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-300 text-sm text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                            >
+                                <LogOut className="h-4 w-4 transition-transform group-hover:-translate-x-1" />
+                                <span className="font-medium">Güvenli Çıkış</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
 
