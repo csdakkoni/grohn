@@ -207,10 +207,12 @@ export default function App() {
             if (isLoggingOut.current) return;
             setSession(session);
             setUser(session?.user ?? null);
+            // Lock UI until role is fetched if user exists
+            if (session?.user) setRoleLoading(true);
             setLoading(false);
         });
         const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-            if (isLoggingOut.current) return; // BLOCK ALL UPDATES IF LOGGING OUT
+            if (isLoggingOut.current) return;
 
             if (event === 'SIGNED_OUT') {
                 setSession(null);
@@ -221,6 +223,8 @@ export default function App() {
             } else {
                 setSession(session);
                 setUser(session?.user ?? null);
+                // If session is restored/refreshed, re-lock to fetch role
+                if (session?.user) setRoleLoading(true);
             }
         });
         return () => subscription.unsubscribe();
@@ -232,37 +236,37 @@ export default function App() {
         if (!user) return;
         setRoleLoading(true);
 
-        // 1. Check if I am a member of a team
-        // Default: No access
         let ownerId = null;
         let role = 'none';
 
-        // Check membership
-        const { data: membership } = await supabase
-            .from('team_members')
-            .select('owner_id, role')
-            .eq('member_id', user.id)
-            .maybeSingle();
-
-        if (membership) {
-            // I am a member (or owner linked as admin)
-            ownerId = membership.owner_id;
-            role = membership.role;
-        } else {
-            // Fallback: Check if I am an owner in team_members (self-reference for first user/owners)
-            const { data: selfMember } = await supabase
+        try {
+            // 1. Check team membership
+            const { data: membership } = await supabase
                 .from('team_members')
                 .select('owner_id, role')
-                .eq('member_email', user.email)
+                .eq('member_id', user.id)
                 .maybeSingle();
 
-            if (selfMember) {
-                // Pending invite exists, maybe trigger didn't fire or race condition
-                // Manually link if ID is missing (handled by SQL trigger usually but safe to check)
+            if (membership) {
+                ownerId = membership.owner_id;
+                role = membership.role;
+            } else {
+                // 2. Fallback: Legacy/First Owner Logic
+                // If not a member, assume I am an OWNER of my own data.
+                // This is critical for the initial admin user (grohn@grohn.com.tr)
+                ownerId = user.id;
+                role = 'admin';
+
+                // Optional: Auto-fix self as member?
+                // For now, just allow access.
             }
+        } catch (e) {
+            console.error('Role fetch error:', e);
+            // Emergency fallback
+            ownerId = user.id;
+            role = 'admin';
         }
 
-        // If no role found, user stays with role='none' and ownerId=null
         setCurrentOwnerId(ownerId);
         setUserRole(role);
         setRoleLoading(false);
