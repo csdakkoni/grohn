@@ -246,7 +246,7 @@ function DocumentLibrary({ documents, inventory, onRefresh, ownerId, onDelete })
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {inventory.filter(item => item.type === 'Ürün').map(item => {
+                {inventory.filter(item => item.type === 'Mamul').map(item => {
                     const itemDocs = documents.filter(d => d.inventory_id === item.id);
                     return (
                         <div key={item.id} className="card-industrial p-4 hover:shadow-md transition-shadow">
@@ -293,7 +293,7 @@ function DocumentLibrary({ documents, inventory, onRefresh, ownerId, onDelete })
                                 <label className="label-industrial">Ürün Seçin</label>
                                 <select className="input-industrial" required value={newDoc.inventory_id} onChange={e => setNewDoc({ ...newDoc, inventory_id: e.target.value })}>
                                     <option value="">Seçiniz...</option>
-                                    {inventory.filter(i => i.type === 'Ürün').map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+                                    {inventory.filter(i => i.type === 'Mamul').map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
                                 </select>
                             </div>
                             <div>
@@ -420,7 +420,7 @@ function CertManagement({ certs, inventory, onRefresh, ownerId, onDelete }) {
                         </tr>
                     </thead>
                     <tbody>
-                        {inventory.filter(item => item.type === 'Ürün').map(item => {
+                        {inventory.filter(item => item.type === 'Mamul').map(item => {
                             const itemCerts = certs.filter(c => c.inventory_id === item.id);
                             return (
                                 <tr key={item.id} className="hover:bg-slate-50/50 transition-colors">
@@ -478,7 +478,7 @@ function CertManagement({ certs, inventory, onRefresh, ownerId, onDelete }) {
                                 <label className="label-industrial">Ürün Seçin</label>
                                 <select className="input-industrial" required value={newCert.inventory_id} onChange={e => setNewCert({ ...newCert, inventory_id: e.target.value })}>
                                     <option value="">Seçiniz...</option>
-                                    {inventory.filter(i => i.type === 'Ürün').map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+                                    {inventory.filter(i => i.type === 'Mamul').map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
                                 </select>
                             </div>
                             <div className="grid grid-cols-2 gap-4">
