@@ -384,38 +384,39 @@ export default function App() {
 
     // Helper functions
     const handleSignOut = () => {
-        if (!window.confirm('Veriler silinip çıkış yapılacak. Onaylıyor musunuz?')) return;
+        if (!window.confirm('Çıkış yapılacaktır. Onaylıyor musunuz?')) return;
 
-        // 1. Fire and forget Supabase (don't await)
-        supabase.auth.signOut().catch(e => console.error('Supabase SignOut Error:', e));
-
-        // 2. Immediate Nuke
-        try {
-            localStorage.clear();
-            sessionStorage.clear();
-
-            // Clear cookies manually
-            document.cookie.split(";").forEach((c) => {
-                document.cookie = c
-                    .replace(/^ +/, "")
-                    .replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
-            });
-
-            // Clear IDB (Best effort)
-            if (window.indexedDB && window.indexedDB.databases) {
-                window.indexedDB.databases().then(dbs => {
-                    dbs.forEach(db => window.indexedDB.deleteDatabase(db.name));
-                });
-            }
-        } catch (e) {
-            console.error('Cleanup Error:', e);
-        }
-
-        // 3. HARD Redirect (Replace history)
-        // Set user to null locally first to force re-render if redirect lags
+        // 1. IMMEDIATE UI RESET (Visual Feedback)
         setSession(null);
         setUser(null);
-        window.location.replace('/'); // replace() represents 'logout' better than href or reload
+        setUserRole('none');
+        setCurrentOwnerId(null);
+
+        // 2. Background Cleanup
+        setTimeout(() => {
+            // Fire and forget Supabase
+            supabase.auth.signOut().catch(e => console.error('Supabase SignOut Error:', e));
+
+            // Nuke Storage
+            try {
+                localStorage.clear();
+                sessionStorage.clear();
+
+                document.cookie.split(";").forEach((c) => {
+                    document.cookie = c
+                        .replace(/^ +/, "")
+                        .replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
+                });
+
+                if (window.indexedDB && window.indexedDB.databases) {
+                    window.indexedDB.databases().then(dbs => {
+                        dbs.forEach(db => window.indexedDB.deleteDatabase(db.name));
+                    });
+                }
+            } catch (e) {
+                console.error('Cleanup Error:', e);
+            }
+        }, 10);
     };
 
     const getAccountName = (id) => accounts.find(a => a.id === parseInt(id))?.name || '-';
