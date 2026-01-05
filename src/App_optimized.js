@@ -384,11 +384,18 @@ export default function App() {
 
     // Helper functions
     const handleSignOut = async () => {
+        if (!window.confirm('Çıkış yapılacaktır. Onaylıyor musunuz?')) return;
         try {
+            // Force clear local storage first
+            localStorage.clear();
+            sessionStorage.clear();
+
+            // Try Supabase sign out
             await supabase.auth.signOut();
         } catch (e) {
             console.error('Logout error:', e);
         } finally {
+            // Absolute reset
             setSession(null);
             setUser(null);
             window.location.href = '/';
