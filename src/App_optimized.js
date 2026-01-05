@@ -1294,6 +1294,16 @@ export default function App() {
         );
     }
 
+    // 2. CHECK SESSION -> SHOW LOGIN
+    if (!user) {
+        return <Auth />;
+    }
+
+    // 3. CHECK ROLE -> SHOW UNAUTHORIZED
+    if (userRole === 'none' && !roleLoading) {
+        return <UnauthorizedView onSignOut={handleSignOut} email={user.email} />;
+    }
+
     return (
         <div className="min-h-screen bg-white flex flex-col md:flex-row h-screen overflow-hidden text-slate-900">
             {/* Mobile Header */}
