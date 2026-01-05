@@ -177,7 +177,7 @@ export default function App() {
 
     // Role & Access State
     const [currentOwnerId, setCurrentOwnerId] = useState(null);
-    const [userRole, setUserRole] = useState('admin'); // 'admin', 'operator', 'viewer'
+    const [userRole, setUserRole] = useState('none'); // 'admin', 'operator', 'viewer' or 'none'
     const [roleLoading, setRoleLoading] = useState(false);
 
     // Data states
@@ -384,10 +384,15 @@ export default function App() {
 
     // Helper functions
     const handleSignOut = async () => {
-        await supabase.auth.signOut();
-        setSession(null);
-        setUser(null);
-        window.location.href = '/';
+        try {
+            await supabase.auth.signOut();
+        } catch (e) {
+            console.error('Logout error:', e);
+        } finally {
+            setSession(null);
+            setUser(null);
+            window.location.href = '/';
+        }
     };
 
     const getAccountName = (id) => accounts.find(a => a.id === parseInt(id))?.name || '-';
