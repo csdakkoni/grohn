@@ -216,13 +216,10 @@ export default function App() {
         if (!user) return;
         setRoleLoading(true);
 
-        // 1. Check if I am a member of someone else's team
-        // Note: For MVP, we assume a user is either an owner OR a member of ONE team.
-        // If they are both, we default to their own team (Admin).
-
-        // First, assume I am the owner (Admin)
-        let ownerId = user.id;
-        let role = 'admin';
+        // 1. Check if I am a member of a team
+        // Default: No access
+        let ownerId = null;
+        let role = 'none';
 
         // Check membership
         const { data: membership } = await supabase
@@ -232,11 +229,24 @@ export default function App() {
             .maybeSingle();
 
         if (membership) {
-            // I am a member
+            // I am a member (or owner linked as admin)
             ownerId = membership.owner_id;
             role = membership.role;
+        } else {
+            // Fallback: Check if I am an owner in team_members (self-reference for first user/owners)
+            const { data: selfMember } = await supabase
+                .from('team_members')
+                .select('owner_id, role')
+                .eq('member_email', user.email)
+                .maybeSingle();
+
+            if (selfMember) {
+                // Pending invite exists, maybe trigger didn't fire or race condition
+                // Manually link if ID is missing (handled by SQL trigger usually but safe to check)
+            }
         }
 
+        // If no role found, user stays with role='none' and ownerId=null
         setCurrentOwnerId(ownerId);
         setUserRole(role);
         setRoleLoading(false);

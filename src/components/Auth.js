@@ -39,7 +39,7 @@ export default function Auth() {
         if (!email) return alert('Lütfen önce e-posta adresinizi girin.');
         setLoading(true);
         const { error } = await supabase.auth.resetPasswordForEmail(email, {
-            redirectTo: window.location.origin,
+            redirectTo: window.location.origin, // This will use the current domain (e.g., https://grohn-kimya.vercel.app)
         });
         if (error) alert(error.message);
         else alert('Şifre sıfırlama bağlantısı e-posta adresinize gönderildi.');
