@@ -4,14 +4,45 @@ import { FlaskConical } from 'lucide-react';
 
 export default function Auth() {
     const [loading, setLoading] = useState(false);
+    const [isSignUp, setIsSignUp] = useState(false);
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
 
-    const handleLogin = async (e) => {
+    const handleAuth = async (e) => {
         e.preventDefault();
         setLoading(true);
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+
+        let error;
+
+        if (isSignUp) {
+            const { error: signUpError } = await supabase.auth.signUp({
+                email,
+                password,
+            });
+            error = signUpError;
+            if (!error) {
+                alert('Kayıt başarılı! Lütfen e-posta adresinize gelen onay linkine tıklayın.');
+            }
+        } else {
+            const { error: signInError } = await supabase.auth.signInWithPassword({
+                email,
+                password
+            });
+            error = signInError;
+        }
+
         if (error) alert(error.message);
+        setLoading(false);
+    };
+
+    const handleForgotPassword = async () => {
+        if (!email) return alert('Lütfen önce e-posta adresinizi girin.');
+        setLoading(true);
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+            redirectTo: window.location.origin,
+        });
+        if (error) alert(error.message);
+        else alert('Şifre sıfırlama bağlantısı e-posta adresinize gönderildi.');
         setLoading(false);
     };
 
@@ -23,9 +54,11 @@ export default function Auth() {
                         <FlaskConical className="h-8 w-8 text-[#0071e3]" />
                     </div>
                     <h1 className="text-2xl font-bold text-[#1d1d1f]">GROHN</h1>
-                    <p className="text-[#86868b] text-sm">ERP Sistemine Giriş</p>
+                    <p className="text-[#86868b] text-sm">
+                        {isSignUp ? 'Yeni Hesap Oluştur' : 'ERP Sistemine Giriş'}
+                    </p>
                 </div>
-                <form onSubmit={handleLogin} className="space-y-4">
+                <form onSubmit={handleAuth} className="space-y-4">
                     <div>
                         <label className="label-industrial block">E-posta</label>
                         <input
@@ -53,9 +86,27 @@ export default function Auth() {
                         disabled={loading}
                         className="btn-primary w-full"
                     >
-                        {loading ? 'Giriş Yapılıyor...' : 'Giriş Yap'}
+                        {loading ? 'İşlem Yapılıyor...' : (isSignUp ? 'Kayıt Ol' : 'Giriş Yap')}
                     </button>
                 </form>
+
+                <div className="mt-6 flex flex-col items-center gap-3 text-sm">
+                    <button
+                        onClick={() => setIsSignUp(!isSignUp)}
+                        className="text-[#0071e3] hover:underline font-medium"
+                    >
+                        {isSignUp ? 'Zaten hesabınız var mı? Giriş Yap' : 'Hesabınız yok mu? Kayıt Ol'}
+                    </button>
+
+                    {!isSignUp && (
+                        <button
+                            onClick={handleForgotPassword}
+                            className="text-gray-500 hover:text-gray-700 text-xs"
+                        >
+                            Şifremi Unuttum
+                        </button>
+                    )}
+                </div>
             </div>
         </div>
     );
