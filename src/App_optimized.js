@@ -385,21 +385,29 @@ export default function App() {
     // Helper functions
     const handleSignOut = async () => {
         if (!window.confirm('Çıkış yapılacaktır. Onaylıyor musunuz?')) return;
-        try {
-            // Force clear local storage first
-            localStorage.clear();
-            sessionStorage.clear();
 
-            // Try Supabase sign out
+        // 1. Clear Supabase
+        try {
             await supabase.auth.signOut();
         } catch (e) {
             console.error('Logout error:', e);
-        } finally {
-            // Absolute reset
-            setSession(null);
-            setUser(null);
-            window.location.href = '/';
         }
+
+        // 2. Nuke Local Storage & Session storage
+        localStorage.clear();
+        sessionStorage.clear();
+
+        // 3. Nuke Cookies (Aggressive)
+        document.cookie.split(";").forEach((c) => {
+            document.cookie = c
+                .replace(/^ +/, "")
+                .replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
+        });
+
+        // 4. Force Reload
+        setSession(null);
+        setUser(null);
+        window.location.href = '/';
     };
 
     const getAccountName = (id) => accounts.find(a => a.id === parseInt(id))?.name || '-';
