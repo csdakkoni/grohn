@@ -47,11 +47,23 @@ export default function RoleManagementModule({ currentUser }) {
 
             if (error) throw error;
 
-            alert('Kullanıcı davet edildi (yetki verildi)!');
+            // Trigger Email API
+            await fetch('/api/send-invite', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    email: formData.email,
+                    role: formData.role,
+                    inviterName: currentUser.email // ideally name, but email works
+                })
+            });
+
+            alert('Kullanıcı davet edildi ve e-posta gönderildi! 📧');
             setFormData({ email: '', role: 'operator' });
             setShowForm(false);
             fetchMembers();
         } catch (error) {
+            console.error(error);
             alert('Hata: ' + error.message);
         }
     };

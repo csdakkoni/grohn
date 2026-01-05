@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
-import { ClipboardCheck, Plus, Save, FileText, CheckCircle, XCircle, Search, Beaker, AlertTriangle, RefreshCw, Book, Settings } from 'lucide-react';
+import { ClipboardCheck, Plus, Save, FileText, CheckCircle, XCircle, Search, Beaker, AlertTriangle, RefreshCw, Book, Settings, Mail } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { preparePDFWithFont } from '../utils/exportUtils';
@@ -449,7 +449,64 @@ export default function QualityControlModule({ inventory, globalSettings = {}, o
             doc.text(`Dijital Kimlik: ${batch.id}-${Date.now()}`, 136, finalY + 14);
         }
 
+        return doc;
+    };
+
+    const downloadCoA = async (batch) => {
+        const product = inventory.find(i => i.id === batch.product_id);
+        const doc = await generateCoA(batch);
         doc.save(`Analiz_Sertifikasi_${product?.name || 'Urun'}_${batch.lot_no}.pdf`);
+    };
+
+    const handleSendCoAEmail = async (batch) => {
+        const email = prompt('Müşteri e-posta adresini giriniz:');
+        if (!email) return;
+
+        setLoading(true);
+        try {
+            const doc = await generateCoA(batch);
+            const pdfBlob = doc.output('blob');
+            const product = inventory.find(i => i.id === batch.product_id);
+            const fileName = `CoA_${batch.lot_no}_${Date.now()}.pdf`;
+
+            // 1. Upload to Supabase Storage (certification-files)
+            const { data: uploadData, error: uploadError } = await supabase.storage
+                .from('certification-files')
+                .upload(`temp_outbox/${fileName}`, pdfBlob, {
+                    contentType: 'application/pdf',
+                    upsert: true
+                });
+
+            if (uploadError) throw uploadError;
+
+            // 2. Get Public URL (or Signed URL if private)
+            // Assuming private bucket, use Signed URL
+            const { data: signedData, error: signError } = await supabase.storage
+                .from('certification-files')
+                .createSignedUrl(`temp_outbox/${fileName}`, 60 * 60 * 24); // 24 hours link
+
+            if (signError) throw signError;
+
+            // 3. Send Email via API
+            await fetch('/api/send-coa', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    to: email,
+                    customerName: 'Sayın Müşterimiz',
+                    productName: product?.name || 'Ürün',
+                    batchNo: batch.lot_no,
+                    fileUrl: signedData.signedUrl
+                })
+            });
+
+            alert('CoA başarıyla e-posta olarak gönderildi! 📤');
+        } catch (error) {
+            console.error(error);
+            alert('Gönderim hatası: ' + error.message);
+        } finally {
+            setLoading(false);
+        }
     };
 
     return (
@@ -946,10 +1003,16 @@ export default function QualityControlModule({ inventory, globalSettings = {}, o
                                                         </td>
                                                         <td className="text-right">
                                                             <button
-                                                                onClick={() => generateCoA(batch)}
+                                                                onClick={() => downloadCoA(batch)}
                                                                 className="text-blue-600 hover:text-blue-800 inline-flex items-center gap-1 font-medium text-xs transition-colors"
                                                             >
-                                                                <FileText size={14} /> CoA İndir
+                                                                <FileText size={14} /> İndir
+                                                            </button>
+                                                            <button
+                                                                onClick={() => handleSendCoAEmail(batch)}
+                                                                className="ml-3 text-green-600 hover:text-green-800 inline-flex items-center gap-1 font-medium text-xs transition-colors"
+                                                            >
+                                                                <Mail size={14} /> Gönder
                                                             </button>
                                                         </td>
                                                     </tr>

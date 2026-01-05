@@ -12,6 +12,7 @@ import CommercialManagementModule from './components/CommercialManagementModule'
 import SalesManagerModule from './components/SalesManagerModule';
 import MarketingModule from './components/MarketingModule';
 import SettingsModule from './components/SettingsModule';
+import UnauthorizedView from './components/UnauthorizedView';
 import { LayoutDashboard, Briefcase, Edit, Trash2, Plus, LogOut, FlaskConical, ShoppingBag, ArrowLeft, Beaker, Factory, Download, Printer, FileSpreadsheet, Filter, Eye, RefreshCw, DollarSign, Package, TrendingUp, Settings, History, AlertTriangle, Users, Shield, Calculator, ClipboardCheck, Menu, X, ChevronDown, ChevronRight, ShoppingCart, FileText, ShieldCheck } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -1236,21 +1237,6 @@ export default function App() {
                 <div className="text-center">
                     <FlaskConical className="h-16 w-16 text-[#0071e3] mx-auto mb-4 animate-pulse" />
                     <div className="text-white text-xl">Yükleniyor...</div>
-                </div>
-            </div>
-        );
-    }
-
-    if (!session) {
-        return <Auth />;
-    }
-
-    if (roleLoading) {
-        return (
-            <div className="min-h-screen bg-[#1d1d1f] flex items-center justify-center">
-                <div className="text-center">
-                    <Shield className="h-16 w-16 text-[#0071e3] mx-auto mb-4 animate-pulse" />
-                    <div className="text-white text-xl">Yetkiler Kontrol Ediliyor...</div>
                 </div>
             </div>
         );
